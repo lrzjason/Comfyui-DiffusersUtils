@@ -46,17 +46,11 @@ def get_tokenizer(model_path):
             transformer=None,
         )
         tokenizer = pipe.tokenizer
+        del pipe
+        gc.collect()
+        torch.cuda.empty_cache()
     except:
-        try:
-            pipe = LongCatImageEditPipeline.from_pretrained(
-                model_path,
-                text_encoder=None,
-                vae=None,
-                transformer=None,
-            )
-            tokenizer = pipe.tokenizer
-        except:
-            raise ValueError(f"Could not load tokenizer from {model_path}")
+        raise ValueError(f"Could not load tokenizer from {model_path}")
     return tokenizer
 def get_vae(model_path, torch_dtype):
     vae = None
@@ -69,45 +63,26 @@ def get_vae(model_path, torch_dtype):
             torch_dtype=torch_dtype,
         )
         vae = pipe.vae
+        del pipe
+        gc.collect()
+        torch.cuda.empty_cache()
     except:
-        try:
-            pipe = LongCatImageEditPipeline.from_pretrained(
-                model_path,
-                text_encoder=None,
-                tokenizer=None,
-                transformer=None,
-                torch_dtype=torch_dtype,
-            )
-            vae = pipe.vae
-        except:
-            raise ValueError(f"Could not load VAE from {model_path}")
+        raise ValueError(f"Could not load VAE from {model_path}")
     return vae
 def get_transformer(model_path, torch_dtype):
     transformer = None
     # First, try to load transformer from subfolder named "transformer"
     transformer_path = os.path.join(model_path, "transformer")
     if os.path.exists(transformer_path):
-        try:
-            transformer = LongCatImageTransformer2DModel.from_pretrained(
-                transformer_path,
-                torch_dtype=torch_dtype,
-            )
-            print(f"Loaded transformer from subfolder: {transformer_path}")
-        except Exception as e:
-            print(f"Failed to load transformer from subfolder {transformer_path}: {e}")
-            raise ValueError(f"Could not load transformer from {transformer_path}")
-    else:
-        # If transformer subfolder doesn't exist, try loading from the main model path directly
-        try:
-            transformer = LongCatImageTransformer2DModel.from_pretrained(
-                model_path,
-                torch_dtype=torch_dtype,
-            )
-            print(f"Loaded transformer from main model path: {model_path}")
-        except Exception as e:
-            print(f"Failed to load transformer from main path {model_path}: {e}")
-            raise ValueError(f"Could not load transformer from {model_path}. "
-                            f"Tried both main path and 'transformer' subfolder.")
+        model_path = transformer_path
+    try:
+        transformer = LongCatImageTransformer2DModel.from_pretrained(
+            model_path,
+            torch_dtype=torch_dtype,
+        )
+    except Exception as e:
+        print(f"Failed to load traansformer from {model_path}: {e}")
+        raise ValueError(f"Could not load transformer from {model_path}")
     return transformer
 def get_text_encoder(model_path, torch_dtype):
     text_encoder = None
@@ -120,17 +95,11 @@ def get_text_encoder(model_path, torch_dtype):
             torch_dtype=torch_dtype,
         )
         text_encoder = pipe.text_encoder
+        del pipe
+        gc.collect()
+        torch.cuda.empty_cache()
     except:
-        try:
-            pipe = LongCatImageEditPipeline.from_pretrained(
-                model_path,
-                transformer=None,
-                vae=None,
-                torch_dtype=torch_dtype,
-            )
-            text_encoder = pipe.text_encoder
-        except:
-            raise ValueError(f"Could not load text encoder from {model_path}")
+        raise ValueError(f"Could not load text encoder from {model_path}")
     
     return text_encoder
 
@@ -227,9 +196,9 @@ def manage_pipeline_for_text_encoding(pipeline,
                                     #   offload_after_encode=False, 
                                       is_image_edit=False, image_pil=None, prompt=""):
     
-    
+    prompt_embeds = None
+    text_ids = None  # Standard pipeline doesn't have text_ids
     dtype = torch.bfloat16
-
     with torch.no_grad():
         if hasattr(pipeline, 'encode_prompt'):
             if is_image_edit and hasattr(pipeline, 'image_processor_vl'):  # Image edit pipeline
@@ -247,19 +216,6 @@ def manage_pipeline_for_text_encoding(pipeline,
                     device,
                     dtype
                 )
-        else:
-            # Standard diffusers pipeline
-            tokenized = pipeline.tokenizer(
-                [prompt],
-                padding="max_length",
-                truncation=True,
-                max_length=pipeline.tokenizer.model_max_length,
-                return_tensors="pt"
-            ).input_ids.to(device)
-
-            prompt_embeds = pipeline.text_encoder(tokenized)[0]
-            text_ids = None  # Standard pipeline doesn't have text_ids
-    
     return prompt_embeds, text_ids
 
 
@@ -801,7 +757,6 @@ class DiffusersLoraLoader:
             "required": {
                 "pipeline": ("PIPELINE",),
                 "lora_path": ("STRING", {"default": "", "multiline": False}),
-                "lora_name": ("STRING", {"default": ""}),
                 "strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
             }
         }
@@ -810,15 +765,24 @@ class DiffusersLoraLoader:
     FUNCTION = "load_lora"
     CATEGORY = "Diffusers"
 
-    def load_lora(self, pipeline, lora_path, lora_name, strength=1.0):
+    def load_lora(self, pipeline, lora_path, strength=1.0):
         if not os.path.exists(lora_path):
-            raise FileNotFoundError(f"LoRA path does not exist: {lora_path}")
+            raise FileNotFoundError(f"LoRA file does not exist: {lora_path}")
 
-        # Check if lora_name ends with .safetensors and add it if not
-        if not lora_name.endswith('.safetensors'):
-            lora_name += '.safetensors'
+        # Extract directory and filename from the full path
+        lora_dir = os.path.dirname(lora_path)
+        lora_filename = os.path.basename(lora_path)
 
-        full_lora_path = os.path.join(lora_path, lora_name)
+        # Get the filename without extension for adapter_name
+        lora_name_without_ext = os.path.splitext(lora_filename)[0]
+
+        # Check if the original lora_filename ends with .safetensors
+        if not lora_filename.lower().endswith('.safetensors'):
+            # If it doesn't have the extension, add it for the full path check
+            lora_filename_with_ext = lora_filename + '.safetensors'
+
+        # Construct full path again to ensure correct format for checking
+        full_lora_path = os.path.join(lora_dir, lora_filename_with_ext)
 
         if not os.path.exists(full_lora_path):
             raise FileNotFoundError(f"LoRA file does not exist: {full_lora_path}")
@@ -826,28 +790,16 @@ class DiffusersLoraLoader:
         # Load LoRA weights into the pipeline
         try:
             pipeline.load_lora_weights(
-                lora_path,
-                weight_name=lora_name,
-                adapter_name=lora_name.replace('.safetensors', '')
+                lora_dir,
+                weight_name=lora_filename_with_ext,  # Use filename with extension for weight_name
+                adapter_name=lora_name_without_ext  # Use filename without extension for adapter name
             )
 
             # Set the adapter with the given strength
-            pipeline.set_adapters([lora_name.replace('.safetensors', '')], adapter_weights=[strength])
+            pipeline.set_adapters([lora_name_without_ext], adapter_weights=[strength])
         except Exception as e:
-            print(f"Warning: Error during LoRA loading: {e}")
-            print("This may be due to components being set to None. Attempting to load with prefix=None...")
-            try:
-                # Try loading with prefix=None to handle missing components
-                pipeline.load_lora_weights(
-                    lora_path,
-                    weight_name=lora_name,
-                    adapter_name=lora_name.replace('.safetensors', ''),
-                    prefix=None  # Use None prefix to handle missing components
-                )
-                pipeline.set_adapters([lora_name.replace('.safetensors', '')], adapter_weights=[strength])
-            except Exception as e2:
-                print(f"LoRA loading failed even with prefix=None: {e2}")
-                raise e  # Re-raise original exception
+            print(f"LoRA loading failed even with prefix=None: {e2}")
+            raise e  # Re-raise original exception
 
         return (pipeline,)
 
