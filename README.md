@@ -139,14 +139,58 @@ Loads cached prompt embeddings from a file.
   - `TEXT_IDS`: Cached text IDs (if available)
   - `STRING`: The cached prompt text
 
+### LoRA Utility Nodes
+
+#### Load LoRA Only (`LoadLoraOnly`)
+Load a LoRA file without applying it to any models. Use with MergeLoraToModel or other nodes to apply the LoRA later.
+- **Inputs:**
+  - `lora_path`: Path to the LoRA file
+- **Outputs:**
+  - `LORA`: The loaded LoRA state dictionary
+
+#### LoRA Layers Operation (`LoraLayersOperation`)
+Modify specific layers in a LoRA by zeroing them out (when scale=0) or scaling them (otherwise) based on pattern matching.
+- **Inputs:**
+  - `lora`: The LoRA state dictionary to modify
+  - `layer_pattern`: Regex pattern to match layer names. Use groups to extract layer indices.
+  - `layer_indices`: Comma-separated list of layer indices to operate on, with support for ranges (e.g., '59', '10,11,12', or '50-53')
+  - `scale_factor`: Scale factor to apply. Use 0 to zero out layers.
+- **Outputs:**
+  - `modified_lora`: The modified LoRA state dictionary
+
+#### LoRA Stat Viewer (`LoraStatViewer`)
+View information about LoRA layers to help define layer patterns for LoraLayersOperation.
+- **Inputs:**
+  - `lora`: The loaded LoRA to analyze
+- **Outputs:**
+  - `lora_info`: Information about the LoRA layers
+
+#### Save LoRA (`SaveLora`)
+Save a modified LoRA state dictionary to a file.
+- **Inputs:**
+  - `lora`: The modified LoRA state dictionary to save
+  - `filename`: Filename to save the LoRA as (e.g. my_lora.safetensors)
+  - `output_dir`: Directory to save the LoRA to (optional, defaults to ComfyUI output directory)
+- **Outputs:**
+  - None (saves file to specified location)
+
+#### Merge LoRA to Transformer (`MergeLoraToTransformer`)
+Apply a pre-loaded LoRA to transformer. This allows separation of loading and applying LoRAs.
+- **Inputs:**
+  - `transformer`: The transformer model to apply the LoRA to
+  - `lora`: The loaded LoRA to apply
+  - `strength_model`: How strongly to modify the diffusion model. This value can be negative.
+  - `adapter_name`: The name of the adapter to use
+- **Outputs:**
+  - `TRANSFORMER`: The modified transformer model
+
 ### LoRA Handling Nodes
 
 #### Load Diffusers LoRA (`DiffusersLoraLoader`)
 Loads and applies LoRA weights to a pipeline.
 - **Inputs:**
   - `pipeline`: The pipeline to apply LoRA to
-  - `lora_path`: Path to the LoRA directory
-  - `lora_name`: Name of the LoRA file
+  - `lora_path`: Path to the LoRA file (full path including filename)
   - `strength`: Strength of the LoRA effect (default: 1.0)
 - **Outputs:**
   - `PIPELINE`: The pipeline with LoRA applied
@@ -202,7 +246,7 @@ The nodes are designed to work together in a pipeline:
 1. Use `DiffusersModelLoader` or individual component loaders to load your model
 2. Combine components using `DiffusersPipelineBuilder` if needed
 3. Encode your prompts using the appropriate text encoding node
-4. Apply LoRAs if desired using `DiffusersLoraLoader`
+4. Apply LoRAs if desired using `DiffusersLoraLoader` or the LoRA utility nodes
 5. Generate images using `DiffusersImageGenerator` or edit images using `DiffusersImageEditGenerator`
 
 For image editing workflows, use the dedicated image editing nodes which handle both image and text processing.

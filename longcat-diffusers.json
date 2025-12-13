@@ -1,0 +1,1915 @@
+{
+  "id": "92112d97-bb64-4b44-86f2-ea5691ef8f6e",
+  "revision": 0,
+  "last_node_id": 70,
+  "last_link_id": 150,
+  "nodes": [
+    {
+      "id": 34,
+      "type": "DiffusersTextEncoderLoader",
+      "pos": [
+        385.236190686802,
+        105.94824393950555
+      ],
+      "size": [
+        275.515234375,
+        82
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model_path",
+          "type": "STRING",
+          "widget": {
+            "name": "model_path"
+          },
+          "link": 63
+        }
+      ],
+      "outputs": [
+        {
+          "name": "TEXT_ENCODER",
+          "type": "TEXT_ENCODER",
+          "links": [
+            61
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "DiffusersTextEncoderLoader"
+      },
+      "widgets_values": [
+        "F:\\T2ITrainer_pulic\\T2ITrainer\\longcat_models\\LongCat-Image-Edit",
+        "bfloat16"
+      ]
+    },
+    {
+      "id": 32,
+      "type": "DiffusersTokenizerLoader",
+      "pos": [
+        393.77955080759,
+        244.24368393911382
+      ],
+      "size": [
+        270,
+        58
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model_path",
+          "type": "STRING",
+          "widget": {
+            "name": "model_path"
+          },
+          "link": 64
+        }
+      ],
+      "outputs": [
+        {
+          "name": "TOKENIZER",
+          "type": "TOKENIZER",
+          "links": [
+            62
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "DiffusersTokenizerLoader"
+      },
+      "widgets_values": [
+        "F:\\T2ITrainer_pulic\\T2ITrainer\\longcat_models\\LongCat-Image-Edit"
+      ]
+    },
+    {
+      "id": 35,
+      "type": "DiffusersPipelineBuilder",
+      "pos": [
+        808.0693995555256,
+        164.64601392132812
+      ],
+      "size": [
+        358.76328125,
+        206
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "pipeline",
+          "shape": 7,
+          "type": "PIPELINE",
+          "link": null
+        },
+        {
+          "name": "text_encoder",
+          "shape": 7,
+          "type": "TEXT_ENCODER",
+          "link": 61
+        },
+        {
+          "name": "transformer",
+          "shape": 7,
+          "type": "TRANSFORMER",
+          "link": null
+        },
+        {
+          "name": "vae",
+          "shape": 7,
+          "type": "VAE",
+          "link": null
+        },
+        {
+          "name": "tokenizer",
+          "shape": 7,
+          "type": "TOKENIZER",
+          "link": 62
+        },
+        {
+          "name": "preprocessor",
+          "shape": 7,
+          "type": "PREPROCESSOR",
+          "link": 60
+        },
+        {
+          "name": "model_path",
+          "type": "STRING",
+          "widget": {
+            "name": "model_path"
+          },
+          "link": 66
+        }
+      ],
+      "outputs": [
+        {
+          "name": "PIPELINE",
+          "type": "PIPELINE",
+          "links": [
+            68
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "DiffusersPipelineBuilder"
+      },
+      "widgets_values": [
+        "",
+        "image_edit",
+        "bfloat16"
+      ]
+    },
+    {
+      "id": 44,
+      "type": "DiffusersVAELoader",
+      "pos": [
+        1790,
+        260
+      ],
+      "size": [
+        270,
+        82
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model_path",
+          "type": "STRING",
+          "widget": {
+            "name": "model_path"
+          },
+          "link": 92
+        }
+      ],
+      "outputs": [
+        {
+          "name": "VAE",
+          "type": "VAE",
+          "links": [
+            81,
+            136
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "DiffusersVAELoader"
+      },
+      "widgets_values": [
+        "",
+        "bfloat16"
+      ]
+    },
+    {
+      "id": 33,
+      "type": "DiffusersPreprocessorLoader",
+      "pos": [
+        392.69148373936923,
+        346.16207353582007
+      ],
+      "size": [
+        277.06015625,
+        58
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "model_path",
+          "type": "STRING",
+          "widget": {
+            "name": "model_path"
+          },
+          "link": 65
+        }
+      ],
+      "outputs": [
+        {
+          "name": "PREPROCESSOR",
+          "type": "PREPROCESSOR",
+          "links": [
+            60,
+            82,
+            137
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "DiffusersPreprocessorLoader"
+      },
+      "widgets_values": [
+        "F:\\T2ITrainer_pulic\\T2ITrainer\\longcat_models\\LongCat-Image-Edit"
+      ]
+    },
+    {
+      "id": 36,
+      "type": "PrimitiveString",
+      "pos": [
+        -30.032118654387546,
+        162.4095504605133
+      ],
+      "size": [
+        270,
+        58
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": [
+            63,
+            64,
+            65,
+            66,
+            73,
+            78,
+            92,
+            138
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PrimitiveString"
+      },
+      "widgets_values": [
+        "F:\\T2ITrainer_pulic\\T2ITrainer\\longcat_models\\LongCat-Image-Edit"
+      ]
+    },
+    {
+      "id": 56,
+      "type": "GetImageSize",
+      "pos": [
+        3045.760926418782,
+        770.6305470062388
+      ],
+      "size": [
+        140,
+        124
+      ],
+      "flags": {},
+      "order": 21,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 112
+        }
+      ],
+      "outputs": [
+        {
+          "name": "width",
+          "type": "INT",
+          "links": null
+        },
+        {
+          "name": "height",
+          "type": "INT",
+          "links": [
+            113
+          ]
+        },
+        {
+          "name": "batch_size",
+          "type": "INT",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "GetImageSize"
+      },
+      "widgets_values": [
+        "width: 1264, height: 848\n batch size: 1"
+      ]
+    },
+    {
+      "id": 57,
+      "type": "LayerUtility: ImageReelComposit",
+      "pos": [
+        3800.691785237831,
+        701.3913315836214
+      ],
+      "size": [
+        311.5337890625,
+        190
+      ],
+      "flags": {},
+      "order": 27,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "reel_1",
+          "type": "Reel",
+          "link": 114
+        },
+        {
+          "name": "reel_2",
+          "shape": 7,
+          "type": "Reel",
+          "link": null
+        },
+        {
+          "name": "reel_3",
+          "shape": 7,
+          "type": "Reel",
+          "link": null
+        },
+        {
+          "name": "reel_4",
+          "shape": 7,
+          "type": "Reel",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "image1",
+          "type": "IMAGE",
+          "links": [
+            115
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LayerUtility: ImageReelComposit"
+      },
+      "widgets_values": [
+        "Alibaba-PuHuiTi-Heavy.ttf",
+        40,
+        32,
+        "light"
+      ],
+      "color": "rgba(38, 73, 116, 0.7)"
+    },
+    {
+      "id": 48,
+      "type": "PreviewImage",
+      "pos": [
+        3014.361192022543,
+        -193.09412024297177
+      ],
+      "size": [
+        189.10519378496656,
+        315.64944761277576
+      ],
+      "flags": {},
+      "order": 19,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 91
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 38,
+      "type": "TextEncodeDiffusersLongCatImageEdit",
+      "pos": [
+        1242.8593833439922,
+        169.998278623775
+      ],
+      "size": [
+        447.0904296875,
+        200
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "pipeline",
+          "type": "PIPELINE",
+          "link": 68
+        },
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 69
+        }
+      ],
+      "outputs": [
+        {
+          "name": "EMBEDDING",
+          "type": "EMBEDDING",
+          "links": [
+            70,
+            74,
+            86,
+            95,
+            102
+          ]
+        },
+        {
+          "name": "TEXT_IDS",
+          "type": "TEXT_IDS",
+          "links": [
+            71,
+            88,
+            97,
+            104
+          ]
+        },
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "TextEncodeDiffusersLongCatImageEdit"
+      },
+      "widgets_values": [
+        "把图片转换成写实风格摄影照片",
+        512,
+        false,
+        "diffusers_image_edit_embedding_cache.pt"
+      ]
+    },
+    {
+      "id": 58,
+      "type": "PreviewImage",
+      "pos": [
+        4219.4776526965015,
+        700.2744910264155
+      ],
+      "size": [
+        140,
+        246
+      ],
+      "flags": {},
+      "order": 29,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 115
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 60,
+      "type": "DiffusersLoraLoader",
+      "pos": [
+        4461.725881000515,
+        464.3039806193426
+      ],
+      "size": [
+        402.89470732135123,
+        82
+      ],
+      "flags": {},
+      "order": 23,
+      "mode": 2,
+      "inputs": [
+        {
+          "name": "pipeline",
+          "type": "PIPELINE",
+          "link": 121
+        }
+      ],
+      "outputs": [
+        {
+          "name": "PIPELINE",
+          "type": "PIPELINE",
+          "links": [
+            122
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "DiffusersLoraLoader"
+      },
+      "widgets_values": [
+        "F:\\models\\Lora\\longcat\\zit_gen-2-8100.safetensors",
+        1
+      ]
+    },
+    {
+      "id": 51,
+      "type": "PreviewImage",
+      "pos": [
+        3694.6196609626586,
+        -238.93408544145387
+      ],
+      "size": [
+        189.10519378496656,
+        315.64944761277576
+      ],
+      "flags": {},
+      "order": 28,
+      "mode": 2,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 98
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 50,
+      "type": "DiffusersImageEditGenerator",
+      "pos": [
+        3660,
+        120
+      ],
+      "size": [
+        300.740234375,
+        278
+      ],
+      "flags": {},
+      "order": 26,
+      "mode": 2,
+      "inputs": [
+        {
+          "name": "pipeline",
+          "type": "PIPELINE",
+          "link": 122
+        },
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 96
+        },
+        {
+          "name": "prompt_embeds",
+          "type": "EMBEDDING",
+          "link": 95
+        },
+        {
+          "name": "text_ids",
+          "type": "TEXT_IDS",
+          "link": 97
+        },
+        {
+          "name": "negative_prompt_embeds",
+          "shape": 7,
+          "type": "EMBEDDING",
+          "link": null
+        },
+        {
+          "name": "negative_text_ids",
+          "shape": 7,
+          "type": "TEXT_IDS",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            98
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "DiffusersImageEditGenerator"
+      },
+      "widgets_values": [
+        26,
+        2.5,
+        1,
+        42,
+        "fixed",
+        true
+      ]
+    },
+    {
+      "id": 54,
+      "type": "PreviewImage",
+      "pos": [
+        3334.6675735588274,
+        -205.5759805600911
+      ],
+      "size": [
+        189.10519378496656,
+        315.64944761277576
+      ],
+      "flags": {},
+      "order": 25,
+      "mode": 2,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 105
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 39,
+      "type": "LoadImage",
+      "pos": [
+        2383.332591804441,
+        -218.4487703663778
+      ],
+      "size": [
+        274.080078125,
+        314
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            69,
+            72,
+            87,
+            96,
+            103,
+            106
+          ]
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": null
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "QQ图片20251113052451.png",
+        "image"
+      ]
+    },
+    {
+      "id": 59,
+      "type": "DiffusersLoraLoader",
+      "pos": [
+        3962.282882269739,
+        467.4906722753999
+      ],
+      "size": [
+        466.550092717383,
+        82
+      ],
+      "flags": {},
+      "order": 18,
+      "mode": 2,
+      "inputs": [
+        {
+          "name": "pipeline",
+          "type": "PIPELINE",
+          "link": 119
+        }
+      ],
+      "outputs": [
+        {
+          "name": "PIPELINE",
+          "type": "PIPELINE",
+          "links": [
+            121
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "DiffusersLoraLoader"
+      },
+      "widgets_values": [
+        "F:\\models\\Lora\\longcat\\lc_any2real_mix-19-8080.safetensors",
+        1
+      ]
+    },
+    {
+      "id": 52,
+      "type": "DiffusersLoraLoader",
+      "pos": [
+        3337.929033109639,
+        469.1278547803768
+      ],
+      "size": [
+        391.64775106338766,
+        82
+      ],
+      "flags": {},
+      "order": 17,
+      "mode": 2,
+      "inputs": [
+        {
+          "name": "pipeline",
+          "type": "PIPELINE",
+          "link": 100
+        }
+      ],
+      "outputs": [
+        {
+          "name": "PIPELINE",
+          "type": "PIPELINE",
+          "links": [
+            101
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "DiffusersLoraLoader"
+      },
+      "widgets_values": [
+        "F:\\models\\Lora\\longcat\\lc_any2real_mix-19-8080.safetensors",
+        1
+      ]
+    },
+    {
+      "id": 53,
+      "type": "DiffusersImageEditGenerator",
+      "pos": [
+        3328.9246874692726,
+        144.61477956853983
+      ],
+      "size": [
+        300.740234375,
+        278
+      ],
+      "flags": {},
+      "order": 22,
+      "mode": 2,
+      "inputs": [
+        {
+          "name": "pipeline",
+          "type": "PIPELINE",
+          "link": 101
+        },
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 103
+        },
+        {
+          "name": "prompt_embeds",
+          "type": "EMBEDDING",
+          "link": 102
+        },
+        {
+          "name": "text_ids",
+          "type": "TEXT_IDS",
+          "link": 104
+        },
+        {
+          "name": "negative_prompt_embeds",
+          "shape": 7,
+          "type": "EMBEDDING",
+          "link": null
+        },
+        {
+          "name": "negative_text_ids",
+          "shape": 7,
+          "type": "TEXT_IDS",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            105
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "DiffusersImageEditGenerator"
+      },
+      "widgets_values": [
+        26,
+        2.5,
+        1,
+        42,
+        "fixed",
+        true
+      ]
+    },
+    {
+      "id": 43,
+      "type": "DiffusersPipelineBuilder",
+      "pos": [
+        2176.992973618147,
+        176.94529101694735
+      ],
+      "size": [
+        358.76328125,
+        206
+      ],
+      "flags": {},
+      "order": 14,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "pipeline",
+          "shape": 7,
+          "type": "PIPELINE",
+          "link": null
+        },
+        {
+          "name": "text_encoder",
+          "shape": 7,
+          "type": "TEXT_ENCODER",
+          "link": null
+        },
+        {
+          "name": "transformer",
+          "shape": 7,
+          "type": "TRANSFORMER",
+          "link": 144
+        },
+        {
+          "name": "vae",
+          "shape": 7,
+          "type": "VAE",
+          "link": 81
+        },
+        {
+          "name": "tokenizer",
+          "shape": 7,
+          "type": "TOKENIZER",
+          "link": null
+        },
+        {
+          "name": "preprocessor",
+          "shape": 7,
+          "type": "PREPROCESSOR",
+          "link": 82
+        },
+        {
+          "name": "model_path",
+          "type": "STRING",
+          "widget": {
+            "name": "model_path"
+          },
+          "link": 78
+        }
+      ],
+      "outputs": [
+        {
+          "name": "PIPELINE",
+          "type": "PIPELINE",
+          "links": [
+            83,
+            100,
+            119
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "DiffusersPipelineBuilder"
+      },
+      "widgets_values": [
+        "",
+        "image_edit",
+        "bfloat16"
+      ]
+    },
+    {
+      "id": 63,
+      "type": "LoadLoraOnly",
+      "pos": [
+        1180,
+        580
+      ],
+      "size": [
+        450.2894672201046,
+        58
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "lora",
+          "type": "LORA",
+          "links": [
+            131,
+            143
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadLoraOnly"
+      },
+      "widgets_values": [
+        "F:\\models\\Lora\\longcat\\lc_any2real_mix-10-7128.safetensors"
+      ]
+    },
+    {
+      "id": 42,
+      "type": "DiffusersTransformerLoader",
+      "pos": [
+        1780,
+        120
+      ],
+      "size": [
+        270,
+        82
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "any",
+          "type": "*",
+          "link": 74
+        },
+        {
+          "name": "model_path",
+          "type": "STRING",
+          "widget": {
+            "name": "model_path"
+          },
+          "link": 73
+        }
+      ],
+      "outputs": [
+        {
+          "name": "TRANSFORMER",
+          "type": "TRANSFORMER",
+          "links": [
+            139,
+            141
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "DiffusersTransformerLoader"
+      },
+      "widgets_values": [
+        "",
+        "bfloat16"
+      ]
+    },
+    {
+      "id": 68,
+      "type": "MergeLoraToTransformer",
+      "pos": [
+        1800,
+        750
+      ],
+      "size": [
+        273.6626953125,
+        102
+      ],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "transformer",
+          "type": "TRANSFORMER",
+          "link": 139
+        },
+        {
+          "name": "lora",
+          "type": "LORA",
+          "link": 132
+        }
+      ],
+      "outputs": [
+        {
+          "name": "TRANSFORMER",
+          "type": "TRANSFORMER",
+          "links": [
+            140
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MergeLoraToTransformer"
+      },
+      "widgets_values": [
+        1,
+        "zero_out"
+      ]
+    },
+    {
+      "id": 69,
+      "type": "DiffusersPipelineBuilder",
+      "pos": [
+        2203.109919597717,
+        472.8589291527065
+      ],
+      "size": [
+        358.76328125,
+        206
+      ],
+      "flags": {},
+      "order": 13,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "pipeline",
+          "shape": 7,
+          "type": "PIPELINE",
+          "link": null
+        },
+        {
+          "name": "text_encoder",
+          "shape": 7,
+          "type": "TEXT_ENCODER",
+          "link": null
+        },
+        {
+          "name": "transformer",
+          "shape": 7,
+          "type": "TRANSFORMER",
+          "link": 140
+        },
+        {
+          "name": "vae",
+          "shape": 7,
+          "type": "VAE",
+          "link": 136
+        },
+        {
+          "name": "tokenizer",
+          "shape": 7,
+          "type": "TOKENIZER",
+          "link": null
+        },
+        {
+          "name": "preprocessor",
+          "shape": 7,
+          "type": "PREPROCESSOR",
+          "link": 137
+        },
+        {
+          "name": "model_path",
+          "type": "STRING",
+          "widget": {
+            "name": "model_path"
+          },
+          "link": 138
+        }
+      ],
+      "outputs": [
+        {
+          "name": "PIPELINE",
+          "type": "PIPELINE",
+          "links": [
+            145
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "DiffusersPipelineBuilder"
+      },
+      "widgets_values": [
+        "",
+        "image_edit",
+        "bfloat16"
+      ]
+    },
+    {
+      "id": 45,
+      "type": "PreviewImage",
+      "pos": [
+        2709.8858307830324,
+        -203.24962795691016
+      ],
+      "size": [
+        210,
+        323.2161343645809
+      ],
+      "flags": {},
+      "order": 20,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 84
+        }
+      ],
+      "outputs": [],
+      "properties": {
+        "Node name for S&R": "PreviewImage"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 67,
+      "type": "LoraLayersOperation",
+      "pos": [
+        1684.9237424746063,
+        567.8171078058813
+      ],
+      "size": [
+        388.84879792281663,
+        106
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "lora",
+          "type": "LORA",
+          "link": 131
+        }
+      ],
+      "outputs": [
+        {
+          "name": "modified_lora",
+          "type": "LORA",
+          "links": [
+            132
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoraLayersOperation"
+      },
+      "widgets_values": [
+        "transformer\\.single_transformer_blocks\\.(\\d+)\\.",
+        "10-19",
+        0.5
+      ]
+    },
+    {
+      "id": 70,
+      "type": "MergeLoraToTransformer",
+      "pos": [
+        1801.0756874497495,
+        413.97523260798795
+      ],
+      "size": [
+        273.6626953125,
+        102
+      ],
+      "flags": {},
+      "order": 12,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "transformer",
+          "type": "TRANSFORMER",
+          "link": 141
+        },
+        {
+          "name": "lora",
+          "type": "LORA",
+          "link": 143
+        }
+      ],
+      "outputs": [
+        {
+          "name": "TRANSFORMER",
+          "type": "TRANSFORMER",
+          "links": [
+            144
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "MergeLoraToTransformer"
+      },
+      "widgets_values": [
+        0,
+        "full"
+      ]
+    },
+    {
+      "id": 55,
+      "type": "LayerUtility: ImageReel",
+      "pos": [
+        3419.8762601674853,
+        681.2895328376513
+      ],
+      "size": [
+        270,
+        238
+      ],
+      "flags": {},
+      "order": 24,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "image1",
+          "type": "IMAGE",
+          "link": 106
+        },
+        {
+          "name": "image2",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 150
+        },
+        {
+          "name": "image3",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 149
+        },
+        {
+          "name": "image4",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "reel_height",
+          "type": "INT",
+          "widget": {
+            "name": "reel_height"
+          },
+          "link": 113
+        }
+      ],
+      "outputs": [
+        {
+          "name": "reel",
+          "type": "Reel",
+          "links": [
+            114
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LayerUtility: ImageReel"
+      },
+      "widgets_values": [
+        "Input",
+        "longcat edit",
+        "anything2real early sample",
+        "any2real mix 8080",
+        512,
+        32
+      ],
+      "color": "rgba(38, 73, 116, 0.7)"
+    },
+    {
+      "id": 46,
+      "type": "DiffusersImageEditGenerator",
+      "pos": [
+        3012.9783924804997,
+        165.99375321232205
+      ],
+      "size": [
+        300.740234375,
+        278
+      ],
+      "flags": {},
+      "order": 15,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "pipeline",
+          "type": "PIPELINE",
+          "link": 145
+        },
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 87
+        },
+        {
+          "name": "prompt_embeds",
+          "type": "EMBEDDING",
+          "link": 86
+        },
+        {
+          "name": "text_ids",
+          "type": "TEXT_IDS",
+          "link": 88
+        },
+        {
+          "name": "negative_prompt_embeds",
+          "shape": 7,
+          "type": "EMBEDDING",
+          "link": null
+        },
+        {
+          "name": "negative_text_ids",
+          "shape": 7,
+          "type": "TEXT_IDS",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            91,
+            149
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "DiffusersImageEditGenerator"
+      },
+      "widgets_values": [
+        26,
+        2.5,
+        1,
+        42,
+        "fixed",
+        true
+      ]
+    },
+    {
+      "id": 40,
+      "type": "DiffusersImageEditGenerator",
+      "pos": [
+        2660.322138881205,
+        165.9535000329936
+      ],
+      "size": [
+        300.740234375,
+        278
+      ],
+      "flags": {},
+      "order": 16,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "pipeline",
+          "type": "PIPELINE",
+          "link": 83
+        },
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 72
+        },
+        {
+          "name": "prompt_embeds",
+          "type": "EMBEDDING",
+          "link": 70
+        },
+        {
+          "name": "text_ids",
+          "type": "TEXT_IDS",
+          "link": 71
+        },
+        {
+          "name": "negative_prompt_embeds",
+          "shape": 7,
+          "type": "EMBEDDING",
+          "link": null
+        },
+        {
+          "name": "negative_text_ids",
+          "shape": 7,
+          "type": "TEXT_IDS",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            84,
+            112,
+            150
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "DiffusersImageEditGenerator"
+      },
+      "widgets_values": [
+        26,
+        2.5,
+        1,
+        42,
+        "fixed",
+        true
+      ]
+    }
+  ],
+  "links": [
+    [
+      60,
+      33,
+      0,
+      35,
+      5,
+      "PREPROCESSOR"
+    ],
+    [
+      61,
+      34,
+      0,
+      35,
+      1,
+      "TEXT_ENCODER"
+    ],
+    [
+      62,
+      32,
+      0,
+      35,
+      4,
+      "TOKENIZER"
+    ],
+    [
+      63,
+      36,
+      0,
+      34,
+      0,
+      "STRING"
+    ],
+    [
+      64,
+      36,
+      0,
+      32,
+      0,
+      "STRING"
+    ],
+    [
+      65,
+      36,
+      0,
+      33,
+      0,
+      "STRING"
+    ],
+    [
+      66,
+      36,
+      0,
+      35,
+      6,
+      "STRING"
+    ],
+    [
+      68,
+      35,
+      0,
+      38,
+      0,
+      "PIPELINE"
+    ],
+    [
+      69,
+      39,
+      0,
+      38,
+      1,
+      "IMAGE"
+    ],
+    [
+      70,
+      38,
+      0,
+      40,
+      2,
+      "EMBEDDING"
+    ],
+    [
+      71,
+      38,
+      1,
+      40,
+      3,
+      "TEXT_IDS"
+    ],
+    [
+      72,
+      39,
+      0,
+      40,
+      1,
+      "IMAGE"
+    ],
+    [
+      73,
+      36,
+      0,
+      42,
+      1,
+      "STRING"
+    ],
+    [
+      74,
+      38,
+      0,
+      42,
+      0,
+      "*"
+    ],
+    [
+      78,
+      36,
+      0,
+      43,
+      6,
+      "STRING"
+    ],
+    [
+      81,
+      44,
+      0,
+      43,
+      3,
+      "VAE"
+    ],
+    [
+      82,
+      33,
+      0,
+      43,
+      5,
+      "PREPROCESSOR"
+    ],
+    [
+      83,
+      43,
+      0,
+      40,
+      0,
+      "PIPELINE"
+    ],
+    [
+      84,
+      40,
+      0,
+      45,
+      0,
+      "IMAGE"
+    ],
+    [
+      86,
+      38,
+      0,
+      46,
+      2,
+      "EMBEDDING"
+    ],
+    [
+      87,
+      39,
+      0,
+      46,
+      1,
+      "IMAGE"
+    ],
+    [
+      88,
+      38,
+      1,
+      46,
+      3,
+      "TEXT_IDS"
+    ],
+    [
+      91,
+      46,
+      0,
+      48,
+      0,
+      "IMAGE"
+    ],
+    [
+      92,
+      36,
+      0,
+      44,
+      0,
+      "STRING"
+    ],
+    [
+      95,
+      38,
+      0,
+      50,
+      2,
+      "EMBEDDING"
+    ],
+    [
+      96,
+      39,
+      0,
+      50,
+      1,
+      "IMAGE"
+    ],
+    [
+      97,
+      38,
+      1,
+      50,
+      3,
+      "TEXT_IDS"
+    ],
+    [
+      98,
+      50,
+      0,
+      51,
+      0,
+      "IMAGE"
+    ],
+    [
+      100,
+      43,
+      0,
+      52,
+      0,
+      "PIPELINE"
+    ],
+    [
+      101,
+      52,
+      0,
+      53,
+      0,
+      "PIPELINE"
+    ],
+    [
+      102,
+      38,
+      0,
+      53,
+      2,
+      "EMBEDDING"
+    ],
+    [
+      103,
+      39,
+      0,
+      53,
+      1,
+      "IMAGE"
+    ],
+    [
+      104,
+      38,
+      1,
+      53,
+      3,
+      "TEXT_IDS"
+    ],
+    [
+      105,
+      53,
+      0,
+      54,
+      0,
+      "IMAGE"
+    ],
+    [
+      106,
+      39,
+      0,
+      55,
+      0,
+      "IMAGE"
+    ],
+    [
+      112,
+      40,
+      0,
+      56,
+      0,
+      "IMAGE"
+    ],
+    [
+      113,
+      56,
+      1,
+      55,
+      4,
+      "INT"
+    ],
+    [
+      114,
+      55,
+      0,
+      57,
+      0,
+      "Reel"
+    ],
+    [
+      115,
+      57,
+      0,
+      58,
+      0,
+      "IMAGE"
+    ],
+    [
+      119,
+      43,
+      0,
+      59,
+      0,
+      "PIPELINE"
+    ],
+    [
+      121,
+      59,
+      0,
+      60,
+      0,
+      "PIPELINE"
+    ],
+    [
+      122,
+      60,
+      0,
+      50,
+      0,
+      "PIPELINE"
+    ],
+    [
+      131,
+      63,
+      0,
+      67,
+      0,
+      "LORA"
+    ],
+    [
+      132,
+      67,
+      0,
+      68,
+      1,
+      "LORA"
+    ],
+    [
+      136,
+      44,
+      0,
+      69,
+      3,
+      "VAE"
+    ],
+    [
+      137,
+      33,
+      0,
+      69,
+      5,
+      "PREPROCESSOR"
+    ],
+    [
+      138,
+      36,
+      0,
+      69,
+      6,
+      "STRING"
+    ],
+    [
+      139,
+      42,
+      0,
+      68,
+      0,
+      "TRANSFORMER"
+    ],
+    [
+      140,
+      68,
+      0,
+      69,
+      2,
+      "TRANSFORMER"
+    ],
+    [
+      141,
+      42,
+      0,
+      70,
+      0,
+      "TRANSFORMER"
+    ],
+    [
+      143,
+      63,
+      0,
+      70,
+      1,
+      "LORA"
+    ],
+    [
+      144,
+      70,
+      0,
+      43,
+      2,
+      "TRANSFORMER"
+    ],
+    [
+      145,
+      69,
+      0,
+      46,
+      0,
+      "PIPELINE"
+    ],
+    [
+      149,
+      46,
+      0,
+      55,
+      2,
+      "IMAGE"
+    ],
+    [
+      150,
+      40,
+      0,
+      55,
+      1,
+      "IMAGE"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.9229599817706425,
+      "offset": [
+        -1088.5085399818126,
+        -95.85139463834611
+      ]
+    },
+    "frontendVersion": "1.33.10"
+  },
+  "version": 0.4
+}
