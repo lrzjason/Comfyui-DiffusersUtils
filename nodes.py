@@ -1,18 +1,23 @@
 import torch
-import folder_paths
-import comfy.utils
 import os
-import hashlib
 from PIL import Image
 import numpy as np
 import gc
 from transformers import AutoProcessor
-from diffusers import StableDiffusionPipeline, StableDiffusionXLImg2ImgPipeline
+import comfy.utils
+import comfy.sd
+import folder_paths
 
 from .longcat.pipeline_longcat_image import LongCatImagePipeline
 from .longcat.pipeline_longcat_image_edit import LongCatImageEditPipeline
 from .longcat.longcat_image_dit import LongCatImageTransformer2DModel
 from comfy.comfy_types.node_typing import IO
+import re
+from diffusers.utils import (
+    convert_unet_state_dict_to_peft,
+)
+from peft.utils import set_peft_model_state_dict
+from safetensors.torch import save_file
 
 def clear_pipeline(piepeline):
     # remove all components
@@ -80,6 +85,7 @@ def get_transformer(model_path, torch_dtype):
             model_path,
             torch_dtype=torch_dtype,
         )
+        
     except Exception as e:
         print(f"Failed to load traansformer from {model_path}: {e}")
         raise ValueError(f"Could not load transformer from {model_path}")
@@ -748,6 +754,342 @@ class TextEncodeDiffusersLongCatImageEdit:
         return (prompt_embeds, text_ids, output_image)
 
 
+def get_lora_dir_filename(lora_path):
+    if not os.path.exists(lora_path):
+        raise FileNotFoundError(f"LoRA file does not exist: {lora_path}")
+
+    # Extract directory and filename from the full path
+    lora_dir = os.path.dirname(lora_path)
+    lora_filename = os.path.basename(lora_path)
+
+    # Get the filename without extension for adapter_name
+    lora_name_without_ext = os.path.splitext(lora_filename)[0]
+    lora_filename_with_ext = lora_filename
+    # Check if the original lora_filename ends with .safetensors
+    if not lora_filename.lower().endswith('.safetensors'):
+        # If it doesn't have the extension, add it for the full path check
+        lora_filename_with_ext = lora_filename + '.safetensors'
+
+    # Construct full path again to ensure correct format for checking
+    full_lora_path = os.path.join(lora_dir, lora_filename_with_ext)
+    if not os.path.exists(full_lora_path):
+        raise FileNotFoundError(f"LoRA file does not exist: {full_lora_path}")
+
+    
+    return (lora_dir, lora_filename_with_ext, lora_name_without_ext)
+
+
+class LoadLoraOnly:
+    def __init__(self):
+        self.loaded_lora = None
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "lora_path": ("STRING", {"default": "", "multiline": False}),
+            }
+        }
+
+    RETURN_TYPES = ("LORA",)
+    RETURN_NAMES = ("lora",)
+    FUNCTION = "load_lora"
+
+    CATEGORY = "LoraUtils"
+    DESCRIPTION = "Load a LoRA file without applying it to any models. Use with MergeLoraToModel or other nodes to apply the LoRA later."
+
+    def load_lora(self, lora_path):
+        # lora_path = folder_paths.get_full_path_or_raise("loras", lora_name)
+        lora = None
+        if self.loaded_lora is not None:
+            if self.loaded_lora[0] == lora_path:
+                lora = self.loaded_lora[1]
+            else:
+                self.loaded_lora = None
+
+        if lora is None:
+            lora = comfy.utils.load_torch_file(lora_path, safe_load=True)
+            self.loaded_lora = (lora_path, lora)
+
+        return (lora,)
+
+
+class LoraLayersOperation:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "lora": ("LORA", {"tooltip": "The LoRA state dictionary to modify."}),
+                "layer_pattern": ("STRING", {"default": ".*transformer_blocks\\.(\\d+)\\.", "multiline": False, "tooltip": "Regex pattern to match layer names. Use groups to extract layer indices."}),
+                "layer_indices": ("STRING", {"default": "59", "multiline": False, "tooltip": "Comma-separated list of layer indices to operate on, with support for ranges (e.g., '59', '10,11,12', or '50-53')."}),
+                "scale_factor": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01, "tooltip": "Scale factor to apply. Use 0 to zero out layers."}),
+            }
+        }
+
+    RETURN_TYPES = ("LORA",)
+    RETURN_NAMES = ("modified_lora",)
+    FUNCTION = "modify_lora"
+
+    CATEGORY = "LoraUtils"
+    DESCRIPTION = "Modify specific layers in a LoRA by zeroing them out (when scale=0) or scaling them (otherwise) based on pattern matching."
+
+    def modify_lora(self, lora, layer_pattern, layer_indices, scale_factor):
+        # Parse layer indices from string, supporting ranges like "50-53" and comma-separated list
+        def parse_indices(indices_str):
+            indices = []
+            if indices_str.strip() == "":
+                return []
+            parts = indices_str.split(",")
+            for part in parts:
+                part = part.strip()
+                
+                # skip empty parts
+                if not part:
+                    continue
+                
+                if "-" in part:
+                    # Handle range notation like "50-53"
+                    try:
+                        start, end = part.split("-")
+                        start_idx = int(start.strip())
+                        end_idx = int(end.strip())
+                        if start_idx > end_idx:
+                            raise ValueError(f"Invalid range: {part} (start index greater than end index)")
+                        indices.extend(range(start_idx, end_idx + 1))
+                    except ValueError:
+                        raise ValueError(f"Invalid range format: {part}. Use format like '10-15'.")
+                else:
+                    # Handle single integer
+                    try:
+                        indices.append(int(part))
+                    except ValueError:
+                        raise ValueError(f"Invalid layer index: {part}")
+            return indices
+        
+        try:
+            layer_indices_list = parse_indices(layer_indices)
+        except ValueError as e:
+            raise ValueError(f"Error parsing layer indices: {str(e)}")
+        
+        layer_set = set(layer_indices_list)
+        modified_keys = []
+        
+        # Compile the pattern
+        pattern = re.compile(layer_pattern)
+        
+        # Work on a copy of the state dict to avoid modifying original
+        modified_lora = {}
+        for key, value in lora.items():
+            modified_lora[key] = value.clone()  # Clone tensors to avoid modifying original
+
+        # check if layer index is empty, return original lora
+        if not layer_indices_list:
+            return (modified_lora,)
+        
+        for key in modified_lora:
+            match = pattern.search(key)
+            if match:
+                # Try to extract layer index - looking for first captured group
+                layer_id = None
+                if len(match.groups()) > 0:
+                    try:
+                        layer_id = int(match.group(1))
+                    except ValueError:
+                        # If grouping didn't extract a number, try looking for digits in the full match
+                        digit_match = re.search(r'\d+', match.group(0))
+                        if digit_match:
+                            layer_id = int(digit_match.group())
+                
+                if layer_id is not None and layer_id in layer_set:
+                    if scale_factor == 0:
+                        # Zero out the layer when scale factor is 0
+                        modified_lora[key] = torch.zeros_like(modified_lora[key])
+                        modified_keys.append(key)
+                    else:
+                        # Scale the layer by the scale factor
+                        modified_lora[key] = modified_lora[key] * scale_factor
+                        modified_keys.append(key)
+
+        print(f"Modified {len(modified_keys)} parameters in layers: {sorted(layer_set)} using pattern '{layer_pattern}'")
+        return (modified_lora,)
+
+
+class SaveLora:
+    def __init__(self):
+        self.output_dir = folder_paths.get_output_directory()
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "lora": ("LORA", {"tooltip": "The modified LoRA state dictionary to save."}),
+                "filename": ("STRING", {"default": "my_lora.safetensors", "tooltip": "Filename to save the LoRA as (e.g. my_lora.safetensors)."}),                
+            },
+            "optional": {
+                "output_dir": ("STRING", {"default": folder_paths.get_output_directory(), "tooltip": "Directory to save the LoRA to. Defaults to ComfyUI output directory if not provided."}),
+            }
+        }
+
+    RETURN_TYPES = ()
+    FUNCTION = "save_lora"
+    OUTPUT_NODE = True
+    CATEGORY = "LoraUtils"
+
+    def save_lora(self, lora, filename, output_dir=None):
+        if output_dir is None:
+            output_dir = self.output_dir
+            
+        # Ensure the directory exists
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Create the full path
+        full_output_path = os.path.join(output_dir, filename)
+        # Add .safetensors extension if not present
+        if not full_output_path.lower().endswith('.safetensors'):
+            full_output_path += '.safetensors'
+
+        # Filter out layers where all values are zero
+        filtered_lora = {}
+        zero_layers = []
+        for key, tensor in lora.items():
+            if isinstance(tensor, torch.Tensor):
+                if not torch.allclose(tensor, torch.zeros_like(tensor), atol=1e-12):
+                    filtered_lora[key] = tensor
+                else:
+                    zero_layers.append(key)
+            else:
+                # Skip non-tensor items or optionally warn/log
+                filtered_lora[key] = tensor  # or skip if undesired
+
+        if zero_layers:
+            print(f"[SaveLora] Removed {len(zero_layers)} zero-only layers: {zero_layers}")
+
+        # Save the filtered lora state dict
+        save_file(filtered_lora, full_output_path)
+
+        print(f"LoRA saved to: {full_output_path} (original {len(lora)} layers → {len(filtered_lora)} layers)")
+        return {}
+
+class LoraStatViewer:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "lora": ("LORA", {"tooltip": "The loaded LoRA to analyze."}),
+            }
+        }
+
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("lora_info",)
+    FUNCTION = "view_lora_stats"
+
+    CATEGORY = "LoraUtils"
+    DESCRIPTION = "View information about LoRA layers to help define layer patterns for LoraLayersOperation."
+
+    def view_lora_stats(self, lora):
+        result = []
+        result.append("=== LoRA Statistics ===")
+        result.append(f"Total number of keys: {len(lora.keys())}")
+        
+        # Group keys by pattern
+        key_types = {}
+        for key in lora.keys():
+            # Extract the layer type (like 'lora.down.weight', 'lora.up.weight', etc.)
+            # Common pattern: prefix.layer_type
+            key_parts = key.split('.')
+            if len(key_parts) >= 3:
+                layer_type = '.'.join(key_parts[-3:])  # Get last 3 parts as layer type
+            else:
+                layer_type = key  # If not enough parts, use the full key
+            
+            if layer_type not in key_types:
+                key_types[layer_type] = []
+            key_types[layer_type].append(key)
+        
+        result.append("\nLayer types found in LoRA:")
+        for layer_type, keys in key_types.items():
+            result.append(f"  {layer_type}: {len(keys)} keys")
+
+        # Show some example keys to help with pattern matching
+        result.append("\nFirst 10 keys (helpful for pattern creation):")
+        for i, key in enumerate(list(lora.keys())[:10]):
+            result.append(f"  [{i}] {key}")
+        
+        # Look for transformer blocks if present
+        transformer_keys = [key for key in lora.keys() if 'transformer_blocks' in key]
+        if transformer_keys:
+            result.append(f"\nFound {len(transformer_keys)} transformer block related keys")
+            unique_blocks = set()
+            for key in transformer_keys:
+                # Find pattern like transformer_blocks.59. or similar
+                matches = re.findall(r'transformer_blocks\.(\d+)', key)
+                for match in matches:
+                    unique_blocks.add(int(match))
+            
+            if unique_blocks:
+                sorted_blocks = sorted(list(unique_blocks))
+                result.append(f"Transformer block indices present: {sorted_blocks[:10]}{'...' if len(sorted_blocks) > 10 else ''}")
+                if len(sorted_blocks) <= 10:
+                    result.append(f"All transformer block indices: {sorted_blocks}")
+        
+        result.append("========================")
+        
+        # Add the full state dictionary
+        result.append("\nFull LoRA State Dictionary Keys:")
+        for i, key in enumerate(lora.keys()):
+            result.append(f"  [{i}] {key}")
+        
+        # Join all results into a single string
+        output_string = "\n".join(result)
+        
+        return (output_string,)
+
+class MergeLoraToTransformer:
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "transformer": ("TRANSFORMER", {"tooltip": "The transformer model to apply the LoRA to."}),
+                "lora": ("LORA", {"tooltip": "The loaded LoRA to apply."}),
+                "strength_model": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01, "tooltip": "How strongly to modify the diffusion model. This value can be negative."}),
+                "adapter_name": ("STRING", {"default": "default", "multiline": False, "tooltip": "The name of the adapter to use."}),
+            }
+        }
+
+    RETURN_TYPES = ("TRANSFORMER", )
+    OUTPUT_TOOLTIPS = ("The modified transformer model.", )
+    FUNCTION = "apply_lora"
+
+    CATEGORY = "LoraUtils"
+    DESCRIPTION = "Apply a pre-loaded LoRA to transformer. This allows separation of loading and applying LoRAs."
+
+    def apply_lora(self, transformer, lora, strength_model, adapter_name):
+        # Both model and clip are provided
+        if strength_model == 0:
+            return (transformer, )
+
+        keys = list(lora.keys())
+        network_alphas = {}
+        for k in keys:
+            if "alpha" in k:
+                alpha_value = lora.get(k)
+                if (torch.is_tensor(alpha_value) and torch.is_floating_point(alpha_value)) or isinstance(
+                    alpha_value, float
+                ):
+                    network_alphas[k] = lora.pop(k)
+                else:
+                    raise ValueError(
+                        f"The alpha key ({k}) seems to be incorrect. If you think this error is unexpected, please open as issue."
+                    )
+        
+        transformer.load_lora_adapter(
+            lora,
+            network_alphas=network_alphas,
+            adapter_name=adapter_name
+        )
+
+        return (transformer, )
+
 class DiffusersLoraLoader:
     """Load and apply LoRA weights to a pipeline."""
 
@@ -766,31 +1108,13 @@ class DiffusersLoraLoader:
     CATEGORY = "Diffusers"
 
     def load_lora(self, pipeline, lora_path, strength=1.0):
-        if not os.path.exists(lora_path):
-            raise FileNotFoundError(f"LoRA file does not exist: {lora_path}")
-
-        # Extract directory and filename from the full path
-        lora_dir = os.path.dirname(lora_path)
-        lora_filename = os.path.basename(lora_path)
-
-        # Get the filename without extension for adapter_name
-        lora_name_without_ext = os.path.splitext(lora_filename)[0]
-
-        # Check if the original lora_filename ends with .safetensors
-        if not lora_filename.lower().endswith('.safetensors'):
-            # If it doesn't have the extension, add it for the full path check
-            lora_filename_with_ext = lora_filename + '.safetensors'
-
-        # Construct full path again to ensure correct format for checking
-        full_lora_path = os.path.join(lora_dir, lora_filename_with_ext)
-
-        if not os.path.exists(full_lora_path):
-            raise FileNotFoundError(f"LoRA file does not exist: {full_lora_path}")
+        lora_dir, lora_filename_with_ext, lora_name_without_ext = get_lora_dir_filename(lora_path)
 
         # Load LoRA weights into the pipeline
         try:
             pipeline.load_lora_weights(
                 lora_dir,
+                prefix=None,
                 weight_name=lora_filename_with_ext,  # Use filename with extension for weight_name
                 adapter_name=lora_name_without_ext  # Use filename without extension for adapter name
             )
@@ -1004,6 +1328,12 @@ class DiffusersImageEditGenerator:
 
 
 NODE_CLASS_MAPPINGS = {
+    "LoadLoraOnly": LoadLoraOnly,
+    "LoraLayersOperation": LoraLayersOperation,
+    "MergeLoraToTransformer": MergeLoraToTransformer,
+    "LoraStatViewer": LoraStatViewer,
+    "SaveLora": SaveLora,
+    
     "DiffusersModelLoader": DiffusersModelLoader,
     "DiffusersTextEncoderLoader": DiffusersTextEncoderLoader,
     "DiffusersTransformerLoader": DiffusersTransformerLoader,
@@ -1021,6 +1351,12 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
+    "LoadLoraOnly": "Load LoRA Only",
+    "LoraLayersOperation": "LoRA Layers Operation",
+    "MergeLoraToTransformer": "Merge LoRA to Transformer",
+    "LoraStatViewer": "LoRA Stat Viewer",
+    "SaveLora": "Save LoRA",
+    
     "DiffusersModelLoader": "Load Diffusers Model",
     "DiffusersTextEncoderLoader": "Load Diffusers Text Encoder",
     "DiffusersTransformerLoader": "Load Diffusers Transformer",
