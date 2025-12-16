@@ -460,7 +460,8 @@ class DiffusersSampling:
             final_image = torch.cat(images, dim=0)  # Concatenate along batch dimension
         else:
             final_image = images[0]
-
+            
+        pipeline.unload_lora_weights()
         return (final_image,)
 
 
