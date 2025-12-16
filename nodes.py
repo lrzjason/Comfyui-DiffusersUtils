@@ -10,7 +10,7 @@ import folder_paths
 
 from .longcat.pipeline_longcat_image import LongCatImagePipeline
 from .longcat.pipeline_longcat_image_edit import LongCatImageEditPipeline
-from .longcat.longcat_image_dit import LongCatImageTransformer2DModel
+from .longcat.transformer_longcat_image import LongCatImageTransformer2DModel
 from comfy.comfy_types.node_typing import IO
 import re
 from diffusers.utils import (
@@ -18,740 +18,450 @@ from diffusers.utils import (
 )
 from peft.utils import set_peft_model_state_dict
 from safetensors.torch import save_file
+from diffusers import DiffusionPipeline
+import inspect
 
-def clear_pipeline(piepeline):
+global_transformer = None
+
+from diffusers import FlowMatchEulerDiscreteScheduler
+from diffusers.models.autoencoders import AutoencoderKL
+from transformers import Qwen2_5_VLForConditionalGeneration, Qwen2Tokenizer, Qwen2VLProcessor
+from .longcat.transformer_longcat_image import LongCatImageTransformer2DModel
+
+
+# Map pipeline names to their classes with their available components
+pipeline_registry = {
+    'LongCatImagePipeline': {
+        'class': LongCatImagePipeline,
+        'components': {
+            'scheduler': FlowMatchEulerDiscreteScheduler,
+            'vae': AutoencoderKL, 
+            'text_encoder': Qwen2_5_VLForConditionalGeneration,
+            'tokenizer': Qwen2Tokenizer,
+            'text_processor': Qwen2VLProcessor,
+            'transformer': LongCatImageTransformer2DModel
+        }
+    },
+    'LongCatImageEditPipeline': {
+        'class': LongCatImageEditPipeline,
+        'components': {
+            'scheduler': FlowMatchEulerDiscreteScheduler,
+            'vae': AutoencoderKL,
+            'text_encoder': Qwen2_5_VLForConditionalGeneration,
+            'tokenizer': Qwen2Tokenizer,
+            'text_processor': Qwen2VLProcessor,
+            'transformer': LongCatImageTransformer2DModel
+        }
+    }
+}
+
+EDIT_PIPELINES = [
+    LongCatImageEditPipeline
+]
+
+def swap_components(piepeline, available_components):
     # remove all components
-    for component in [
-        "text_encoder",
-        "transformer",
-        "vae",
-        "tokenizer",
-        "text_processor",
-        "image_encoder",
-        "feature_extractor",
-    ]:
+    for component in available_components.keys():
         if hasattr(piepeline, component):
             c = getattr(piepeline, component)
             if c is not None and hasattr(c, "to"):
                 c = c.to("cpu")
     gc.collect()
     torch.cuda.empty_cache()
-def get_preprocessor(model_path):
-    processor = None
-    processor = AutoProcessor.from_pretrained(model_path, subfolder='tokenizer')
-    return processor
 
-def get_tokenizer(model_path):
-    tokenizer = None
-    try:
-        pipe = LongCatImagePipeline.from_pretrained(
-            model_path,
-            text_encoder=None,
-            vae=None,
-            transformer=None,
-        )
-        tokenizer = pipe.tokenizer
-        del pipe
-        gc.collect()
-        torch.cuda.empty_cache()
-    except:
-        raise ValueError(f"Could not load tokenizer from {model_path}")
-    return tokenizer
-def get_vae(model_path, torch_dtype):
-    vae = None
-    try:
-        pipe = LongCatImagePipeline.from_pretrained(
-            model_path,
-            text_encoder=None,
-            tokenizer=None,
-            transformer=None,
-            torch_dtype=torch_dtype,
-        )
-        vae = pipe.vae
-        del pipe
-        gc.collect()
-        torch.cuda.empty_cache()
-    except:
-        raise ValueError(f"Could not load VAE from {model_path}")
-    return vae
-def get_transformer(model_path, torch_dtype):
-    transformer = None
-    # First, try to load transformer from subfolder named "transformer"
-    transformer_path = os.path.join(model_path, "transformer")
-    if os.path.exists(transformer_path):
-        model_path = transformer_path
-    try:
-        transformer = LongCatImageTransformer2DModel.from_pretrained(
-            model_path,
-            torch_dtype=torch_dtype,
-        )
-        
-    except Exception as e:
-        print(f"Failed to load traansformer from {model_path}: {e}")
-        raise ValueError(f"Could not load transformer from {model_path}")
-    return transformer
-def get_text_encoder(model_path, torch_dtype):
-    text_encoder = None
-    # Try loading text encoder from different pipeline types
-    try:
-        pipe = LongCatImagePipeline.from_pretrained(
-            model_path,
-            transformer=None,
-            vae=None,
-            torch_dtype=torch_dtype,
-        )
-        text_encoder = pipe.text_encoder
-        del pipe
-        gc.collect()
-        torch.cuda.empty_cache()
-    except:
-        raise ValueError(f"Could not load text encoder from {model_path}")
-    
-    return text_encoder
+class DiffusersTextEncode:
+    """
+    Abstract node to encode prompts for various pipeline types.
 
-# def create_components(model_path, pipeline_info):
-#     text_encoder = None
-#     transformer = None
-#     vae = None
-#     tokenizer = None
-#     preprocessor = None
-    
-#     # load components
-#     if pipeline_info["text_encoder"]:
-#         text_encoder = get_text_encoder(model_path, pipeline_info["dtype"])
-#     if pipeline_info["transformer"]:
-#         transformer = get_text_encoder(model_path, pipeline_info["dtype"])
-#     if pipeline_info["vae"]:
-#         vae = get_vae(model_path, pipeline_info["dtype"])
-#     if pipeline_info["tokenizer"]:
-#         tokenizer = get_tokenizer(model_path)
-#     if pipeline_info["preprocessor"]:
-#         preprocessor = get_preprocessor(model_path)
-    
-#     return text_encoder, transformer, vae, tokenizer, preprocessor
-        
-
-def create_pipeline(pipeline_type, model_path, vae, pipeline, text_encoder, transformer, tokenizer, preprocessor, 
-                    torch_dtype):
-    if pipeline is None:
-        loading_kwargs = {}
-        loading_kwargs["torch_dtype"] = torch_dtype if torch_dtype is not None else torch.bfloat16
-        loading_kwargs["vae"] = vae if vae is not None else None
-        loading_kwargs["text_encoder"] = text_encoder if text_encoder is not None else None
-        loading_kwargs["transformer"] = transformer if transformer is not None else None
-        loading_kwargs["tokenizer"] = tokenizer if tokenizer is not None else None
-        # longcat is called text_processor for preprocessor
-        loading_kwargs["text_processor"] = preprocessor if preprocessor is not None else None
-        loading_kwargs["image_encoder"] = None
-        loading_kwargs["feature_extractor"] = None
-
-        # Build pipeline based on user selection
-        if pipeline_type == "image":
-            # Build regular LongCat image pipeline
-            try:
-                pipe = LongCatImagePipeline.from_pretrained(
-                    model_path,
-                    **loading_kwargs
-                )
-                print(f"Built LongCatImagePipeline from {model_path}")
-            except Exception as e:
-                raise ValueError(f"Could not build LongCatImagePipeline: {e}")
-        elif pipeline_type == "image_edit":
-            # Build LongCat image edit pipeline
-            try:
-                pipe = LongCatImageEditPipeline.from_pretrained(
-                    model_path,
-                    **loading_kwargs
-                )
-                print(f"Built LongCatImageEditPipeline from {model_path}")
-            except Exception as e:
-                raise ValueError(f"Could not build LongCatImageEditPipeline: {e}")
-        else:  # pipeline_type == "auto"
-            # Try to determine pipeline type and build accordingly
-            try:
-                # Try building a LongCat image pipeline first
-                pipe = LongCatImagePipeline.from_pretrained(
-                    model_path,
-                    **loading_kwargs
-                )
-                print(f"Auto-detected and built LongCatImagePipeline from {model_path}")
-            except:
-                try:
-                    # Try building a LongCat image edit pipeline
-                    pipe = LongCatImageEditPipeline.from_pretrained(
-                        model_path,
-                        **loading_kwargs
-                    )
-                    print(f"Auto-detected and built LongCatImageEditPipeline from {model_path}")
-                except:
-                    raise ValueError(f"Could not build pipeline from components - tried both image and image_edit types")
-    else:
-        pipe = pipeline
-        setattr(pipe, "vae", vae if vae is not None else None)
-        setattr(pipe, "text_encoder", text_encoder if text_encoder is not None else None)
-        setattr(pipe, "transformer", transformer if transformer is not None else None)
-        setattr(pipe, "tokenizer", tokenizer if tokenizer is not None else None)
-        setattr(pipe, "text_processor", preprocessor if preprocessor is not None else None)
-        setattr(pipe, "image_encoder", None)
-        setattr(pipe, "feature_extractor", None)
-    return pipe
-
-def manage_pipeline_for_text_encoding(pipeline, 
-                                    #   pipeline_info, 
-                                      device, 
-                                    #   offload_after_encode=False, 
-                                      is_image_edit=False, image_pil=None, prompt=""):
-    
-    prompt_embeds = None
-    text_ids = None  # Standard pipeline doesn't have text_ids
-    dtype = torch.bfloat16
-    with torch.no_grad():
-        if hasattr(pipeline, 'encode_prompt'):
-            if is_image_edit and hasattr(pipeline, 'image_processor_vl'):  # Image edit pipeline
-                # Image edit pipeline has signature: encode_prompt(image, prompts, device, dtype)
-                prompt_embeds, text_ids = pipeline.encode_prompt(
-                    [image_pil],  # Pass the image for image edit pipelines
-                    [prompt],
-                    device,
-                    dtype
-                )
-            else:  # Regular pipeline
-                # Regular pipeline has signature: encode_prompt(prompts, device, dtype)
-                prompt_embeds, text_ids = pipeline.encode_prompt(
-                    [prompt],
-                    device,
-                    dtype
-                )
-    return prompt_embeds, text_ids
-
-
-class DiffusersModelLoader:
-    """Load a diffusers model from a directory path."""
+    This node can handle both text-only and text+image encoding depending on the pipeline type.
+    """
 
     @classmethod
-    def INPUT_TYPES(s):
+    def INPUT_TYPES(cls):
         return {
             "required": {
-                "model_path": ("STRING", {"default": "", "multiline": False}),
-                "dtype": (["float32", "float16", "bfloat16"], {"default": "float16"}),
+                "pipeline": ("PIPELINE",),
+                "prompt": ("STRING", {"multiline": True, "default": "Masterpiece, best quality, 8k uhd, photo realistic,"})
             },
             "optional": {
-                "load_vae": ("BOOLEAN", {"default": True}),
-                "load_text_encoder": ("BOOLEAN", {"default": True}),
-                "load_transformer": ("BOOLEAN", {"default": True}),
-                "load_tokenizer": ("BOOLEAN", {"default": True}),
-                "load_image_encoder": ("BOOLEAN", {"default": True}),
+                "image": ("IMAGE",),  # Optional image input for pipelines that support text+image encoding
+                "batch_size": ("INT", {"default": 1, "min": 1, "max": 64})
+            }
+        }
+
+    RETURN_TYPES = ("DIFFUSERS_COND", )  # positive, negative
+    RETURN_NAMES = ("diffusers_cond", )
+    FUNCTION = "encode_prompt"
+    CATEGORY = "Diffusers/Encode"
+
+    def encode_prompt(self, pipeline, prompt, image=None, batch_size=1):
+        """
+        Encodes the prompt using the provided pipeline.
+
+        Args:
+            pipeline: The loaded pipeline object
+            prompt: Text prompt to encode
+            negative_prompt: Negative text prompt to encode
+            image: Optional image for pipelines that support text+image encoding
+            batch_size: Number of images to generate
+
+        Returns:
+            tuple: (positive_conditioning, negative_conditioning)
+        """
+        # Determine pipeline type and use appropriate encoding method
+        if hasattr(pipeline, 'encode_prompt'):
+            if image is not None:
+                # Already a PIL image
+                encoded_output = pipeline.encode_prompt(
+                    prompt=[prompt],
+                    image=image,
+                )
+            else:
+                # Handle text-only encoding
+                encoded_output = pipeline.encode_prompt([prompt])
+
+            # Pass the output directly without assuming its structure
+            cond = {
+                "encoded_output": encoded_output,
+                "pipeline_type": type(pipeline).__name__,
+                "batch_size": batch_size,
+                "prompt": prompt,
+            }
+
+        else:
+            # Fallback for pipelines that don't have encode_prompt method
+            raise NotImplementedError(f"The pipeline {type(pipeline)} does not have an encode_prompt method implemented")
+
+        return (cond, )
+
+
+class DiffusersPipeline:
+    """
+    A flexible node that can initialize different LongCat diffusion pipelines with dynamic components.
+
+    This node accepts a pipeline class name and specifies which components to load,
+    allowing for flexible initialization of various LongCat models.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "pipeline_class_name": (["LongCatImagePipeline", "LongCatImageEditPipeline"], {"default": "LongCatImagePipeline"}),
+                "model_path": ("STRING", {"default": ""}),  # Updated default for LongCat
+            },
+            "optional": {
+                "any": (IO.ANY, {}),
+                "pipeline": ("PIPELINE",),
+                "components": ("STRING", {"default": ""}),  # Comma-separated list of components to load
+                "presets": (["text_encoder, tokenizer, text_processor", "scheduler, vae, text_processor, transformer"], {"default": "text_encoder, tokenizer, text_processor"}),
+                "torch_dtype": (["float16", "float32", "bfloat16"], {"default": "bfloat16"}),  # Updated default for LongCat
+                # "device_map": ("STRING", {"default": "auto"}),  # e.g., "auto", "balanced", "balanced_low_0", "sequential"
+                # "variant": ("STRING", {"default": "None"}),  # e.g., "fp16" for models with fp16 weights
+                # "low_cpu_mem_usage": ("BOOLEAN", {"default": True}),
+                # "use_safetensors": ("BOOLEAN", {"default": True}),
             }
         }
 
     RETURN_TYPES = ("PIPELINE",)
-    FUNCTION = "load_model"
-    CATEGORY = "Diffusers"
+    RETURN_NAMES = ("pipeline",)
+    FUNCTION = "load_pipeline"
+    CATEGORY = "Diffusers/LongCat"
 
-    def load_model(self, model_path, dtype, load_vae=True, load_text_encoder=True,
-                   load_transformer=True, load_tokenizer=True, load_image_encoder=True):
-        if not model_path or not os.path.exists(model_path):
-            raise FileNotFoundError(f"Model path does not exist: {model_path}")
+    def load_pipeline(self, pipeline_class_name, model_path, 
+                      any=None,
+                      pipeline=None, 
+                      torch_dtype="bfloat16",
+                    #   device_map="auto",
+                    #   variant="None",
+                    #   low_cpu_mem_usage=True,
+                    #   use_safetensors=True,
+                      components="",
+                      presets=""):
+        if components == "":
+            components = presets
+        
+        # Get the pipeline class and component info
+        if pipeline_class_name not in pipeline_registry:
+            raise ValueError(f"Pipeline class '{pipeline_class_name}' not found in LongCat pipeline registry")
 
-        # Set torch dtype
-        torch_dtype = {
-            "float32": torch.float32,
+        pipeline_info = pipeline_registry[pipeline_class_name]
+        pipeline_class = pipeline_info['class']
+        available_components = pipeline_info['components']
+
+        # swap components to cpu
+        if pipeline is not None:
+            swap_components(pipeline, available_components)
+
+        # Convert dtype string to actual dtype
+        dtype_mapping = {
             "float16": torch.float16,
+            "float32": torch.float32,
             "bfloat16": torch.bfloat16
-        }[dtype]
+        }
+        torch_dtype = dtype_mapping.get(torch_dtype, torch.bfloat16)  # Updated default for LongCat
 
-        # Prepare component loading arguments
-        loading_kwargs = {}
-
-        # Only load components that are requested
-        if not load_vae:
-            loading_kwargs["vae"] = None
-        if not load_text_encoder:
-            loading_kwargs["text_encoder"] = None
-        if not load_transformer:
-            loading_kwargs["transformer"] = None
-        if not load_tokenizer:
-            loading_kwargs["tokenizer"] = None
-        if not load_image_encoder:
-            loading_kwargs["image_encoder"] = None
-
-        loading_kwargs["torch_dtype"] = torch_dtype
-
-        # Determine pipeline type based on config
-        config_path = os.path.join(model_path, "config.json")
-        if os.path.exists(config_path):
-            # Try to detect pipeline type from config
-            # For now, assume LongCat pipeline
-            try:
-                pipe = LongCatImagePipeline.from_pretrained(
-                    model_path,
-                    **loading_kwargs
-                )
-            except:
-                # Try alternative pipeline
-                pipe = LongCatImageEditPipeline.from_pretrained(
-                    model_path,
-                    **loading_kwargs
-                )
+        # Parse components string - comma separated values
+        if components and components.lower() != "none" and components.strip():
+            component_list = [comp.strip().lower() for comp in components.split(",") if comp.strip()]
         else:
-            raise ValueError(f"Could not determine pipeline type for {model_path}")
+            component_list = []  # Default components
 
-        # Move to device
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        pipe = pipe.to(device)
-
-        return (pipe,)
-
-
-class DiffusersTextEncoderLoader:
-    """Load only the text encoder from a diffusers model."""
-    
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "model_path": ("STRING", {"default": "", "multiline": False}),
-                "dtype": (["float32", "float16", "bfloat16"], {"default": "float16"}),
-            }
-        }
-    
-    RETURN_TYPES = ("TEXT_ENCODER",)
-    FUNCTION = "load_text_encoder"
-    CATEGORY = "Diffusers"
-
-    def load_text_encoder(self, model_path, dtype):
-        if not model_path or not os.path.exists(model_path):
-            raise FileNotFoundError(f"Model path does not exist: {model_path}")
-        
-        torch_dtype = {
-            "float32": torch.float32,
-            "float16": torch.float16,
-            "bfloat16": torch.bfloat16
-        }[dtype]
-        
-        text_encoder = get_text_encoder(model_path, torch_dtype)
-        
-        # Move to device
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        text_encoder = text_encoder.to(device)
-        
-        return (text_encoder,)
-
-
-class DiffusersTransformerLoader:
-    """Load only the transformer from a diffusers model."""
-
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "any": (IO.ANY, {}),
-                "model_path": ("STRING", {"default": "", "multiline": False}),
-                "dtype": (["float32", "float16", "bfloat16"], {"default": "float16"}),
-            }
+        # Prepare kwargs for pipeline initialization
+        kwargs = {
+            "torch_dtype": torch_dtype,
+            # "device_map": "auto"
+            # "low_cpu_mem_usage": low_cpu_mem_usage,
+            # "use_safetensors": use_safetensors
         }
 
-    RETURN_TYPES = ("TRANSFORMER",)
-    FUNCTION = "load_transformer"
-    CATEGORY = "Diffusers"
+        # if device_map and device_map.lower() != "none":
+        #     kwargs["device_map"] = device_map
 
-    def load_transformer(self, any, model_path, dtype):
-        if not model_path or not os.path.exists(model_path):
-            raise FileNotFoundError(f"Model path does not exist: {model_path}")
+        # if variant and variant.lower() != "none":
+        #     kwargs["variant"] = variant
 
-        torch_dtype = {
-            "float32": torch.float32,
-            "float16": torch.float16,
-            "bfloat16": torch.bfloat16
-        }[dtype]
+        # Initialize components dictionary with all available components, but set to None if not requested
+        components_dict = {}
 
-        transformer = get_transformer(model_path, torch_dtype)
-
-        # Move to device
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        transformer = transformer.to(device)
-
-        return (transformer,)
-
-
-class DiffusersVAELoader:
-    """Load only the VAE from a diffusers model."""
-    
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "model_path": ("STRING", {"default": "", "multiline": False}),
-                "dtype": (["float32", "float16", "bfloat16"], {"default": "float16"}),
-            }
-        }
-    
-    RETURN_TYPES = ("VAE",)
-    FUNCTION = "load_vae"
-    CATEGORY = "Diffusers"
-
-    def load_vae(self, model_path, dtype):
-        if not model_path or not os.path.exists(model_path):
-            raise FileNotFoundError(f"Model path does not exist: {model_path}")
-        
-        torch_dtype = {
-            "float32": torch.float32,
-            "float16": torch.float16,
-            "bfloat16": torch.bfloat16
-        }[dtype]
-        
-        vae = get_vae(model_path, torch_dtype)
-        
-        # Move to device
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        vae = vae.to(device)
-        
-        return (vae,)
-
-
-class DiffusersTokenizerLoader:
-    """Load only the tokenizer from a diffusers model."""
-    
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "model_path": ("STRING", {"default": "", "multiline": False}),
-            }
-        }
-    
-    RETURN_TYPES = ("TOKENIZER",)
-    FUNCTION = "load_tokenizer"
-    CATEGORY = "Diffusers"
-
-    def load_tokenizer(self, model_path):
-        if not model_path or not os.path.exists(model_path):
-            raise FileNotFoundError(f"Model path does not exist: {model_path}")
-        
-        tokenizer = get_tokenizer(model_path)
-        
-        return (tokenizer,)
-
-
-class DiffusersPreprocessorLoader:
-    """Load only the preprocessor from a diffusers model."""
-    
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "model_path": ("STRING", {"default": "", "multiline": False}),
-            }
-        }
-    
-    RETURN_TYPES = ("PREPROCESSOR",)
-    FUNCTION = "load_preprocessor"
-    CATEGORY = "Diffusers"
-    def load_preprocessor(self, model_path):
-        if not model_path or not os.path.exists(model_path):
-            raise FileNotFoundError(f"Model path does not exist: {model_path}")
-        
-        try:
-            preprocessor = get_preprocessor(model_path)
-        except:
-            raise ValueError(f"Could not load text processor from {model_path}")
-        
-        return (preprocessor,)
-
-
-class DiffusersPipelineBuilder:
-    """Build a pipeline from individual components."""
-
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "model_path": ("STRING", {"default": "", "multiline": False}),
-                "pipeline_type": (["auto", "image", "image_edit"], {"default": "auto"}),
-                "dtype": (["float32", "float16", "bfloat16"], {"default": "float16"}),
-            },
-            "optional": {
-                "pipeline": ("PIPELINE", ),
-                "text_encoder": ("TEXT_ENCODER",),
-                "transformer": ("TRANSFORMER",),
-                "vae": ("VAE",),
-                "tokenizer": ("TOKENIZER",),
-                "preprocessor": ("PREPROCESSOR",),
-                # "image_encoder": ("IMAGE_ENCODER",),
-                # "feature_extractor": ("FEATURE_EXTRACTOR",),
-                # "load_remaining_components": ("BOOLEAN", {"default": False}),
-            }
-        }
-
-    RETURN_TYPES = ("PIPELINE", 
-                    # "PIPELINE_INFO"
+        # Iterate over available components and set them based on whether they were requested
+        for comp_name, comp_class in available_components.items():
+            if comp_name in component_list:
+                # Load the requested component
+                if comp_name == 'transformer':
+                    components_dict[comp_name] = comp_class.from_pretrained(
+                        model_path, subfolder=comp_name, **kwargs
                     )
-    FUNCTION = "build_pipeline"
-    CATEGORY = "Diffusers"
+                elif comp_name in ['vae', 'text_encoder']:
+                    components_dict[comp_name] = comp_class.from_pretrained(
+                        model_path, subfolder=comp_name, **kwargs
+                    )
+                elif comp_name == 'tokenizer':
+                    components_dict[comp_name] = comp_class.from_pretrained(
+                        model_path, subfolder=comp_name
+                    )
+                elif comp_name == 'text_processor':
+                    components_dict[comp_name] = comp_class.from_pretrained(
+                        model_path, subfolder=comp_name
+                    )
+                elif comp_name == 'scheduler':
+                    components_dict[comp_name] = comp_class.from_pretrained(
+                        model_path, subfolder=comp_name
+                    )
+            else:
+                # Set to None if not in requested components
+                components_dict[comp_name] = None
 
-    def build_pipeline(self, model_path, pipeline_type, dtype, pipeline=None, text_encoder=None, transformer=None,
-                       vae=None, tokenizer=None, preprocessor=None,
-                    #    image_encoder=None, 
-                    #    feature_extractor=None
-                       ):
-        if not model_path or not os.path.exists(model_path):
-            raise FileNotFoundError(f"Model path does not exist: {model_path}")
+        if pipeline is None:
+            pipeline = pipeline_class(**components_dict)
+        else:
+            # Update pipeline with loaded components
+            for comp_name, comp_class in available_components.items():
+                if comp_name in component_list:
+                    if hasattr(pipeline, comp_name):
+                        setattr(pipeline, comp_name, components_dict[comp_name])
 
-        torch_dtype = {
-            "float32": torch.float32,
-            "float16": torch.float16,
-            "bfloat16": torch.bfloat16
-        }[dtype]
+        # Set attributes to track which components were actually loaded (not None)
+        loaded_components = [name for name, comp in components_dict.items() if comp is not None]
+        pipeline._loaded_components = loaded_components
+        pipeline._requested_components = component_list
 
-        pipe = create_pipeline(pipeline_type, model_path, vae, pipeline, text_encoder, transformer, tokenizer, preprocessor, torch_dtype)
-        # Move to device
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        pipe = pipe.to(device)
-        
-        # pipeline_info = {
-        #     "model_path": model_path,
-        #     "pipeline_type": pipeline_type,
-        #     "dtype": dtype,
-        #     "text_encoder": text_encoder is not None,
-        #     "transformer": transformer is not None,
-        #     "vae": vae is not None,
-        #     "tokenizer": tokenizer is not None,
-        #     "preprocessor": preprocessor is not None,
-        #     # "image_encoder": image_encoder is not None,
-        # }
-        pipe.enable_model_cpu_offload()
-        return (pipe, 
-                # pipeline_info
-                )
+        # Move to appropriate device based on device_map
+        # if device_map and device_map.lower() == "auto":
+        #     # Let accelerate handle the device mapping
+        #     pass
+        # else:
+        #     # Move to specific device if not using auto mapping
+        # if hasattr(pipeline, 'to'):
+        #     pipeline.to("cuda" if torch.cuda.is_available() else "cpu")
 
+        pipeline.enable_model_cpu_offload()
+        return (pipeline,)
 
-# Keep the existing text encode nodes for compatibility
-class TextEncodeDiffusersLongCat:
-    """Encode text using the pipeline's text encoder. Can optionally offload the text encoder after encoding."""
+def get_prompt_embeds(diffusers_cond):
+    # Extract conditioning information from diffusers_cond
+    # The encode_prompt method returns an encoded_output that could be various formats
+    encoded_output = diffusers_cond["encoded_output"]
+
+    # Extract the actual prompt embeddings from the encoded output
+    # Based on how encode_prompt is typically implemented, it might return different structures
+    if isinstance(encoded_output, tuple):
+        # If it's a tuple like (prompt_embeds, text_ids), extract the first element which is prompt_embeds
+        prompt_embeds = encoded_output[0] if len(encoded_output) > 0 else None
+    elif isinstance(encoded_output, dict):
+        # If it's a dict, try common keys used for embeddings
+        if 'prompt_embeds' in encoded_output:
+            prompt_embeds = encoded_output['prompt_embeds']
+    elif isinstance(encoded_output, torch.Tensor):
+        # If it's directly a tensor, use it
+        prompt_embeds = encoded_output
+    else:
+        # Fallback: assume it's something we can use directly or convert to tensor
+        prompt_embeds = encoded_output
+    
+    return prompt_embeds
+
+# def is_edit_pipeline(pipeline):
+#     # get pipeline class
+#     pipeline_class = type(pipeline)
+#     print("pipeline_class", pipeline_class)
+#     is_edit = pipeline_class in EDIT_PIPELINES
+#     print("is_edit", is_edit)
+    
+#     return is_edit
+
+class DiffusersSampling:
+    """
+    A flexible sampling node that performs the generation loop using a pipeline and conditioning.
+
+    This node accepts a loaded pipeline, diffusers conditioning, and sampling parameters
+    to generate images using the diffusion process.
+    """
 
     @classmethod
-    def INPUT_TYPES(s):
+    def INPUT_TYPES(cls):
         return {
             "required": {
                 "pipeline": ("PIPELINE",),
-                # "pipeline_info": ("PIPELINE_INFO",),
-                "prompt": ("STRING", {"multiline": True, "dynamicPrompts": True}),
+                "diffusers_cond": ("DIFFUSERS_COND",),
+                "steps": ("INT", {"default": 26, "min": 1, "max": 100}),
+                "cfg": ("FLOAT", {"default": 1.5, "min": 0.0, "max": 20.0, "step": 0.1}),
             },
             "optional": {
-                # "offload_after_encode": ("BOOLEAN", {"default": False}),
-                "cache_embeddings": ("BOOLEAN", {"default": False}),
-                "cache_file": ("STRING", {"default": "diffusers_embedding_cache.pt"}),
+                "negative_diffusers_cond": ("DIFFUSERS_COND",),
+                "num_images_per_prompt": ("INT", {"default": 1, "min": 1, "max": 8}),
+                "seed": ("INT", {"default": 42, "min": 0, "max": 0xffffffffffffffff}),
+                "image": ("IMAGE",),  # Optional image input for image editing
+                "width": ("INT", {"default": 1024, "min": 256, "max": 4096, "step": 64}),  # Optional width for regular generation
+                "height": ("INT", {"default": 1024, "min": 256, "max": 4096, "step": 64}),  # Optional height for regular generation
             }
         }
 
-    OUTPUT_NODE = True
-    RETURN_TYPES = ("EMBEDDING", "TEXT_IDS")
-    FUNCTION = "encode"
-    CATEGORY = "Diffusers"
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("image",)
+    FUNCTION = "generate"
+    CATEGORY = "Diffusers/Sampling"
 
-    def encode(self, pipeline, 
-            #    pipeline_info, 
-               prompt, 
-            #    offload_after_encode=False, 
-               cache_embeddings=False, cache_file="diffusers_embedding_cache.pt"):
+    def generate(self, pipeline, diffusers_cond, steps, cfg,
+                 negative_diffusers_cond=None, num_images_per_prompt=1, seed=42, image=None, width=1024, height=1024):
+        """
+        Performs the generation loop using the provided pipeline and conditioning.
+
+        Args:
+            pipeline: Loaded diffusion pipeline
+            diffusers_cond: Conditioning from DiffusersTextEncode node
+            steps: Number of inference steps
+            cfg: Guidance scale
+            negative_diffusers_cond: Negative conditioning (optional)
+            num_images_per_prompt: Number of images to generate per prompt
+            seed: Random seed for generation
+            image: Input image for image editing (optional)
+            width: Output image width (for regular generation, or override for editing)
+            height: Output image height (for regular generation, or override for editing)
+        """
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        generator = torch.Generator(device=device).manual_seed(seed)
 
-        load_cache = False
-        # Check if embeddings are cached and if the prompt matches
-        if cache_embeddings and os.path.exists(cache_file):
-            print(f"Loading cached prompt embeddings from {cache_file}...")
-            try:
-                cached_data = torch.load(cache_file)
-                # Check if the cached data includes prompt hash for verification
-                if "prompt_hash" in cached_data and "prompt" in cached_data:
-                    cached_prompt = cached_data["prompt"]
-                    if cached_prompt == prompt:
-                        print("Prompt matches cached embeddings, using cache...")
-                        prompt_embeds = cached_data["prompt_embeds"]
-                        text_ids = cached_data["text_ids"]
-                        load_cache = True
-            except Exception as e:
-                print(f"Error reading cache file, regenerating embeddings: {e}")
-        
-        if not load_cache:
-            print("Prompt changed, regenerating embeddings...")
-            # Use the helper method to manage pipeline components for text encoding
-            prompt_embeds, text_ids = manage_pipeline_for_text_encoding(
-                pipeline, 
-                # pipeline_info, 
-                device, 
-                # offload_after_encode=offload_after_encode,
-                is_image_edit=False, prompt=prompt
-            )
+        prompt_embeds = get_prompt_embeds(diffusers_cond)
+        prompt_embeds = prompt_embeds.to(device)
 
-            if cache_embeddings:
-                # Update cache with new prompt
-                cache_data = {
-                    "prompt_embeds": prompt_embeds,
-                    "text_ids": text_ids,
-                    "prompt": prompt,  # Store the prompt for verification
-                    "prompt_hash": hash(prompt)  # Also store hash as additional verification
-                }
-                torch.save(cache_data, cache_file)
-                print(f"New prompt embeddings cached to {cache_file}")
-                
-                
-        # detach
-        # prompt_embeds = prompt_embeds.detach()
-        # text_ids = text_ids.detach()
-        
-        clear_pipeline(pipeline)
-        return (prompt_embeds, text_ids)
+        if negative_diffusers_cond is not None:
+            negative_prompt_embeds = get_prompt_embeds(negative_diffusers_cond)
+        else:
+            negative_prompt_embeds = torch.zeros_like(prompt_embeds)
 
+        # Check if this is an image editing pipeline by looking for image input
+        # is_image_edit = is_edit_pipeline(pipeline)
 
-class TextEncodeDiffusersLongCatCached:
-    """Load cached prompt embeddings from a file."""
-
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "cache_file": ("STRING", {"default": "diffusers_embedding_cache.pt"}),
-            }
+        # Prepare kwargs for pipeline call
+        pipeline_kwargs = {
+            "prompt_embeds": prompt_embeds,
+            "num_inference_steps": steps,
+            "guidance_scale": cfg,
+            "generator": generator,
+            "num_images_per_prompt": num_images_per_prompt,
         }
 
-    RETURN_TYPES = ("EMBEDDING", "TEXT_IDS", "STRING")  # Added STRING output for the cached prompt
-    FUNCTION = "load_cached_embeddings"
-    CATEGORY = "Diffusers"
+        # Add negative prompt only if it's available
+        if negative_prompt_embeds is not None:
+            pipeline_kwargs["negative_prompt_embeds"] = negative_prompt_embeds
 
-    def load_cached_embeddings(self, cache_file):
-        if not os.path.exists(cache_file):
-            raise FileNotFoundError(f"Cache file does not exist: {cache_file}")
+        # Handle image editing vs regular generation based on pipeline type and input
+        if image is not None:
+            # Get input image dimensions
+            if len(image.shape) == 4:
+                # [B, H, W, C] format
+                _, img_height, img_width, _ = image.shape
+            elif len(image.shape) == 3:
+                # [H, W, C] format
+                img_height, img_width, _ = image.shape
+            else:
+                raise ValueError(f"Unexpected image tensor shape: {image.shape}")
 
-        print(f"Loading cached prompt embeddings from {cache_file}...")
-        try:
-            cached_data = torch.load(cache_file)
-            prompt_embeds = cached_data["prompt_embeds"]
-            text_ids = cached_data["text_ids"] if "text_ids" in cached_data else None
+            # Convert image tensor to PIL for image editing
+            # Assuming image is in [B, H, W, C] format with values in [0, 1]
+            if len(image.shape) == 4:
+                # Get first image in batch if multiple are provided
+                image_tensor = image[0] if image.shape[0] > 1 else image.squeeze(0)
+            else:
+                image_tensor = image
 
-            # Get the cached prompt if available for verification
-            cached_prompt = cached_data.get("prompt", "Prompt not available in cache")
+            # Convert from [0,1] to [0,255] and to numpy
+            image_np = (image_tensor * 255).byte().numpy()
+            image_pil = Image.fromarray(image_np.astype(np.uint8))
 
-        except Exception as e:
-            raise Exception(f"Error loading cache file: {e}")
+            # Use input image dimensions for editing, or use custom dimensions if provided
+            if width == 1024 and height == 1024:  # Default values, meaning use input image size
+                # Use the input image's actual dimensions, maintaining its exact aspect ratio
+                target_w, target_h = img_width, img_height
+            else:
+                # User specified custom dimensions - maintain the input image's aspect ratio
+                # but scale to fit within the specified bounds
+                original_ratio = img_width / img_height
+                target_ratio = width / height
 
-        return (prompt_embeds, text_ids, cached_prompt)
+                if original_ratio > target_ratio:
+                    # Input image is wider than target - fit to target width
+                    target_w = width
+                    target_h = int(width / original_ratio)
+                else:
+                    # Input image is taller than target - fit to target height
+                    target_h = height
+                    target_w = int(height * original_ratio)
 
+            # Resize the image to the calculated dimensions that maintain aspect ratio
+            image_pil = image_pil.resize((target_w, target_h), Image.LANCZOS)
 
-class TextEncodeDiffusersLongCatImageEdit:
-    """Encode text and image for image edit pipelines."""
-
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "pipeline": ("PIPELINE",),
-                # "pipeline_info": ("PIPELINE_INFO",),
-                "prompt": ("STRING", {"multiline": True, "dynamicPrompts": True}),
-                "image": ("IMAGE",),
-            },
-            "optional": {
-                "resolution": ("INT", {"default": 512, "min": 256, "max": 2048}),
-                # "offload_after_encode": ("BOOLEAN", {"default": False}),
-                "cache_embeddings": ("BOOLEAN", {"default": False}),
-                "cache_file": ("STRING", {"default": "diffusers_image_edit_embedding_cache.pt"}),
-            }
-        }
-
-    OUTPUT_NODE = True
-    RETURN_TYPES = ("EMBEDDING", "TEXT_IDS", "IMAGE")
-    FUNCTION = "encode"
-    CATEGORY = "Diffusers"
-
-    def encode(self, pipeline, 
-            #    pipeline_info, 
-               prompt, image, resolution=512, 
-            #    offload_after_encode=False,
-               cache_embeddings=False, cache_file="diffusers_image_edit_embedding_cache.pt"):
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-        # Ensure we have batch dimension
-        if len(image.shape) == 3:  # [H, W, C]
-            image_batch = image.unsqueeze(0)  # Add batch dimension -> [B, H, W, C]
-        elif len(image.shape) == 4:  # [B, H, W, C]
-            image_batch = image
+            # Add image for image editing pipeline
+            # The LongCat pipeline expects a list of PIL images for the 'image' parameter
+            pipeline_kwargs["image"] = [image_pil]
+            result = pipeline(**pipeline_kwargs)
         else:
-            raise ValueError(f"Unexpected image tensor shape: {image.shape}")
+            # For regular generation, use the provided width and height
+            pipeline_kwargs["height"] = height
+            pipeline_kwargs["width"] = width
+            result = pipeline(**pipeline_kwargs)
 
-        # Process first image in batch for the pipeline (which expects single image)
-        image_to_process = image_batch[0]  # Get first image [H, W, C]
+        # Convert PIL images to tensors in ComfyUI format
+        images = []
+        for img in result.images:
+            # Convert PIL image to numpy array in [H, W, C] format with values in [0, 1]
+            img_array = np.array(img).astype(np.float32) / 255.0
+            # Convert to torch tensor with shape [H, W, C]
+            img_tensor = torch.from_numpy(img_array)
+            # Ensure it's in the right format [H, W, C]
+            if img_tensor.dim() == 3:
+                # Add batch dimension if not already present
+                img_tensor = img_tensor.unsqueeze(0)  # Add batch dimension at index 0 to make [B, H, W, C]
+            images.append(img_tensor)
 
-        # Convert from [0,1] to [0,255] and to numpy
-        image_np = (image_to_process * 255).byte().numpy()
-        image_pil = Image.fromarray(image_np.astype(np.uint8))
-
-        # Resize image to resolution
-        image_pil = image_pil.resize((resolution, resolution), Image.LANCZOS)
-        
-        load_cache = False
-        # Check if embeddings are cached and if the prompt matches
-        if cache_embeddings and os.path.exists(cache_file):
-            print(f"Loading cached prompt embeddings from {cache_file}...")
-            try:
-                cached_data = torch.load(cache_file)
-                # Check if the cached data includes prompt hash for verification
-                if "prompt_hash" in cached_data and "prompt" in cached_data:
-                    cached_prompt = cached_data["prompt"]
-                    # Also check if image shape matches
-                    cached_image_shape = cached_data.get("image_shape", None)
-                    image_shape_matches = cached_image_shape == tuple(image.shape) if cached_image_shape else True
-
-                    if cached_prompt == prompt and image_shape_matches:
-                        print("Prompt and image shape match cached embeddings, using cache...")
-                        prompt_embeds = cached_data["prompt_embeds"]
-                        text_ids = cached_data["text_ids"]
-                        load_cache = True
-            except Exception as e:
-                print(f"Error reading cache file, regenerating embeddings: {e}")
-        
-        if not load_cache:
-            # If there's an error reading the cache, regenerate embeddings
-            # Use the helper method to manage pipeline components for text encoding
-            prompt_embeds, text_ids = manage_pipeline_for_text_encoding(
-                pipeline, 
-                # pipeline_info, 
-                device, 
-                # offload_after_encode=offload_after_encode,
-                is_image_edit=True, image_pil=image_pil, prompt=prompt
-            )
-
-            # Cache the embeddings if requested
-            if cache_embeddings:
-                cache_data = {
-                    "prompt_embeds": prompt_embeds,
-                    "text_ids": text_ids,
-                    "prompt": prompt,  # Store the prompt for verification
-                    "prompt_hash": hash(prompt),  # Also store hash as additional verification
-                    "image_shape": tuple(image.shape)  # Include image shape to detect image changes
-                }
-                torch.save(cache_data, cache_file)
-                print(f"Prompt embeddings cached to {cache_file}")
-            
-        # Return the original image in proper ComfyUI format [B, H, W, C]
-        # The processed image_tensor is only used for the pipeline encoding
-        # Return the original input image, but ensure it's in the proper [B, H, W, C] format
-        if len(image.shape) == 3:  # [H, W, C] - add batch dimension
-            output_image = image.unsqueeze(0)
-        elif len(image.shape) == 4:  # [B, H, W, C] - already correct format
-            output_image = image
+        # Stack images if there are multiple
+        if len(images) > 1:
+            final_image = torch.cat(images, dim=0)  # Concatenate along batch dimension
         else:
-            raise ValueError(f"Unexpected original image tensor shape: {image.shape}")
+            final_image = images[0]
 
-        # Ensure image values are in the expected [0, 1] range
-        if output_image.max() > 1.0:
-            output_image = output_image / 255.0 if output_image.max() > 255.0 else output_image
-
-        # detach
-        # prompt_embeds = prompt_embeds.detach()
-        # text_ids = text_ids.detach()
-        
-        clear_pipeline(pipeline)
-        return (prompt_embeds, text_ids, output_image)
+        return (final_image,)
 
 
 def get_lora_dir_filename(lora_path):
@@ -779,7 +489,7 @@ def get_lora_dir_filename(lora_path):
     return (lora_dir, lora_filename_with_ext, lora_name_without_ext)
 
 
-class LoadLoraOnly:
+class DiffusersLoadLoraOnly:
     def __init__(self):
         self.loaded_lora = None
 
@@ -795,7 +505,7 @@ class LoadLoraOnly:
     RETURN_NAMES = ("lora",)
     FUNCTION = "load_lora"
 
-    CATEGORY = "LoraUtils"
+    CATEGORY = "Diffusers/Lora"
     DESCRIPTION = "Load a LoRA file without applying it to any models. Use with MergeLoraToModel or other nodes to apply the LoRA later."
 
     def load_lora(self, lora_path):
@@ -814,7 +524,7 @@ class LoadLoraOnly:
         return (lora,)
 
 
-class LoraLayersOperation:
+class DiffusersLoraLayersOperation:
     @classmethod
     def INPUT_TYPES(s):
         return {
@@ -830,7 +540,7 @@ class LoraLayersOperation:
     RETURN_NAMES = ("modified_lora",)
     FUNCTION = "modify_lora"
 
-    CATEGORY = "LoraUtils"
+    CATEGORY = "Diffusers/Lora"
     DESCRIPTION = "Modify specific layers in a LoRA by zeroing them out (when scale=0) or scaling them (otherwise) based on pattern matching."
 
     def modify_lora(self, lora, layer_pattern, layer_indices, scale_factor):
@@ -914,7 +624,7 @@ class LoraLayersOperation:
         return (modified_lora,)
 
 
-class SaveLora:
+class DiffusersSaveLora:
     def __init__(self):
         self.output_dir = folder_paths.get_output_directory()
 
@@ -933,7 +643,7 @@ class SaveLora:
     RETURN_TYPES = ()
     FUNCTION = "save_lora"
     OUTPUT_NODE = True
-    CATEGORY = "LoraUtils"
+    CATEGORY = "Diffusers/Lora"
 
     def save_lora(self, lora, filename, output_dir=None):
         if output_dir is None:
@@ -970,7 +680,7 @@ class SaveLora:
         print(f"LoRA saved to: {full_output_path} (original {len(lora)} layers → {len(filtered_lora)} layers)")
         return {}
 
-class LoraStatViewer:
+class DiffusersLoraStatViewer:
     @classmethod
     def INPUT_TYPES(s):
         return {
@@ -983,7 +693,7 @@ class LoraStatViewer:
     RETURN_NAMES = ("lora_info",)
     FUNCTION = "view_lora_stats"
 
-    CATEGORY = "LoraUtils"
+    CATEGORY = "Diffusers/Lora"
     DESCRIPTION = "View information about LoRA layers to help define layer patterns for LoraLayersOperation."
 
     def view_lora_stats(self, lora):
@@ -1044,29 +754,29 @@ class LoraStatViewer:
         
         return (output_string,)
 
-class MergeLoraToTransformer:
+class DiffusersMergeLoraToPipeline:
     @classmethod
     def INPUT_TYPES(s):
         return {
             "required": {
-                "transformer": ("TRANSFORMER", {"tooltip": "The transformer model to apply the LoRA to."}),
+                "pipeline": ("PIPELINE",),
                 "lora": ("LORA", {"tooltip": "The loaded LoRA to apply."}),
-                "strength_model": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01, "tooltip": "How strongly to modify the diffusion model. This value can be negative."}),
+                "strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01, "tooltip": "How strongly to modify the diffusion model. This value can be negative."}),
                 "adapter_name": ("STRING", {"default": "default", "multiline": False, "tooltip": "The name of the adapter to use."}),
             }
         }
 
-    RETURN_TYPES = ("TRANSFORMER", )
-    OUTPUT_TOOLTIPS = ("The modified transformer model.", )
+    RETURN_TYPES = ("PIPELINE", )
+    OUTPUT_TOOLTIPS = ("The modified pipeline.", )
     FUNCTION = "apply_lora"
 
-    CATEGORY = "LoraUtils"
+    CATEGORY = "Diffusers/Lora"
     DESCRIPTION = "Apply a pre-loaded LoRA to transformer. This allows separation of loading and applying LoRAs."
 
-    def apply_lora(self, transformer, lora, strength_model, adapter_name):
+    def apply_lora(self, pipeline, lora, strength, adapter_name):
         # Both model and clip are provided
-        if strength_model == 0:
-            return (transformer, )
+        if strength == 0:
+            return (pipeline, )
 
         keys = list(lora.keys())
         network_alphas = {}
@@ -1082,293 +792,33 @@ class MergeLoraToTransformer:
                         f"The alpha key ({k}) seems to be incorrect. If you think this error is unexpected, please open as issue."
                     )
         
-        transformer.load_lora_adapter(
+        pipeline.transformer.load_lora_adapter(
             lora,
             network_alphas=network_alphas,
             adapter_name=adapter_name
         )
 
-        return (transformer, )
+        return (pipeline, )
 
-class DiffusersLoraLoader:
-    """Load and apply LoRA weights to a pipeline."""
-
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "pipeline": ("PIPELINE",),
-                "lora_path": ("STRING", {"default": "", "multiline": False}),
-                "strength": ("FLOAT", {"default": 1.0, "min": -10.0, "max": 10.0, "step": 0.01}),
-            }
-        }
-
-    RETURN_TYPES = ("PIPELINE",)
-    FUNCTION = "load_lora"
-    CATEGORY = "Diffusers"
-
-    def load_lora(self, pipeline, lora_path, strength=1.0):
-        lora_dir, lora_filename_with_ext, lora_name_without_ext = get_lora_dir_filename(lora_path)
-
-        # Load LoRA weights into the pipeline
-        try:
-            pipeline.load_lora_weights(
-                lora_dir,
-                prefix=None,
-                weight_name=lora_filename_with_ext,  # Use filename with extension for weight_name
-                adapter_name=lora_name_without_ext  # Use filename without extension for adapter name
-            )
-
-            # Set the adapter with the given strength
-            pipeline.set_adapters([lora_name_without_ext], adapter_weights=[strength])
-        except Exception as e:
-            print(f"LoRA loading failed even with prefix=None: {e2}")
-            raise e  # Re-raise original exception
-
-        return (pipeline,)
-
-
-class DiffusersLoraUnloader:
-    """Unload LoRA weights from a pipeline."""
-
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "pipeline": ("PIPELINE",),
-            }
-        }
-
-    RETURN_TYPES = ("PIPELINE",)
-    FUNCTION = "unload_lora"
-    CATEGORY = "Diffusers"
-
-    def unload_lora(self, pipeline):
-        if hasattr(pipeline, 'unload_lora_weights'):
-            pipeline.unload_lora_weights()
-        return (pipeline,)
-
-
-class DiffusersImageGenerator:
-    """Generate images using a pipeline with embeddings and LoRAs."""
-
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "pipeline": ("PIPELINE",),
-                "prompt_embeds": ("EMBEDDING",),
-                "width": ("INT", {"default": 1024, "min": 256, "max": 4096, "step": 64}),
-                "height": ("INT", {"default": 1024, "min": 256, "max": 4096, "step": 64}),
-                "num_inference_steps": ("INT", {"default": 30, "min": 1, "max": 100}),
-                "guidance_scale": ("FLOAT", {"default": 2.5, "min": 0.0, "max": 10.0}),
-            },
-            "optional": {
-                "text_ids": ("TEXT_IDS",),
-                "negative_prompt_embeds": ("EMBEDDING",),
-                "negative_text_ids": ("TEXT_IDS",),
-                "num_images_per_prompt": ("INT", {"default": 1, "max": 10}),
-                "seed": ("INT", {"default": 42}),
-                "auto_unload_lora": ("BOOLEAN", {"default": True}),
-            }
-        }
-
-    RETURN_TYPES = ("IMAGE",)
-    FUNCTION = "generate"
-    CATEGORY = "Diffusers"
-
-    def generate(self, pipeline, prompt_embeds, width, height, num_inference_steps,
-                 guidance_scale, negative_prompt_embeds=None, text_ids=None,
-                 negative_text_ids=None, num_images_per_prompt=1, seed=42, auto_unload_lora=True):
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-        generator = torch.Generator(device=device).manual_seed(seed)
-
-        # Prepare text IDs if available
-        kwargs = {}
-        if text_ids is not None:
-            kwargs["text_ids"] = text_ids
-        if negative_text_ids is not None:
-            kwargs["negative_text_ids"] = negative_text_ids
-
-        # Handle different pipeline types
-        try:
-            if hasattr(pipeline, 'transformer') and hasattr(pipeline, 'scheduler'):
-                # LongCat pipeline
-                result = pipeline(
-                    prompt_embeds=prompt_embeds,
-                    negative_prompt_embeds=negative_prompt_embeds,
-                    height=height,
-                    width=width,
-                    num_inference_steps=num_inference_steps,
-                    guidance_scale=guidance_scale,
-                    generator=generator,
-                    num_images_per_prompt=num_images_per_prompt,
-                    **kwargs
-                )
-            else:
-                # Standard diffusers pipeline
-                # This is a fallback implementation - adjust based on actual pipeline requirements
-                raise NotImplementedError("Standard diffusers generation not implemented for this pipeline")
-
-        except Exception as e:
-            print(f"Error during generation: {e}")
-            raise e
-
-        # Convert PIL images to tensors
-        images = []
-        for img in result.images:
-            img_array = np.array(img).astype(np.float32) / 255.0
-            img_tensor = torch.from_numpy(img_array).unsqueeze(0)
-            images.append(img_tensor)
-
-        # Stack images if there are multiple
-        if len(images) > 1:
-            final_image = torch.cat(images, dim=0)
-        else:
-            final_image = images[0]
-
-        # Auto-unload LoRA weights after generation to free memory
-        if auto_unload_lora and hasattr(pipeline, 'unload_lora_weights'):
-            pipeline.unload_lora_weights()
-
-        return (final_image,)
-
-
-class DiffusersImageEditGenerator:
-    """Generate edited images using a pipeline with embeddings and LoRAs."""
-
-    @classmethod
-    def INPUT_TYPES(s):
-        return {
-            "required": {
-                "pipeline": ("PIPELINE",),
-                "image": ("IMAGE",),
-                "prompt_embeds": ("EMBEDDING",),
-                "text_ids": ("TEXT_IDS",),
-                "num_inference_steps": ("INT", {"default": 30, "min": 1, "max": 100}),
-                "guidance_scale": ("FLOAT", {"default": 2.5, "min": 0.0, "max": 10.0}),
-            },
-            "optional": {
-                "negative_prompt_embeds": ("EMBEDDING",),
-                "negative_text_ids": ("TEXT_IDS",),
-                "num_images_per_prompt": ("INT", {"default": 1, "max": 10}),
-                "seed": ("INT", {"default": 42}),
-                "auto_unload_lora": ("BOOLEAN", {"default": True}),
-            }
-        }
-
-    RETURN_TYPES = ("IMAGE",)
-    FUNCTION = "generate"
-    CATEGORY = "Diffusers"
-
-    def generate(self, pipeline, image, prompt_embeds, text_ids, num_inference_steps,
-                 guidance_scale, negative_prompt_embeds=None, 
-                 negative_text_ids=None, num_images_per_prompt=1, seed=42, auto_unload_lora=True):
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-        generator = torch.Generator(device=device).manual_seed(seed)
-
-        # Convert image tensor to PIL
-        image_np = image.squeeze().numpy()
-        image_pil = Image.fromarray((image_np * 255).astype(np.uint8))
-
-        # Prepare text IDs if available
-        kwargs = {}
-        if text_ids is not None:
-            kwargs["text_ids"] = text_ids
-        if negative_text_ids is not None:
-            kwargs["negative_text_ids"] = negative_text_ids
-
-        # Handle image editing pipeline - check for specific attributes to identify image edit pipeline
-        try:
-            if hasattr(pipeline, 'image_processor_vl'):  # Image edit pipeline
-                # LongCat image edit pipeline - accepts image parameter
-                result = pipeline(
-                    image=image_pil,
-                    prompt_embeds=prompt_embeds,
-                    negative_prompt_embeds=negative_prompt_embeds,
-                    num_inference_steps=num_inference_steps,
-                    guidance_scale=guidance_scale,
-                    generator=generator,
-                    num_images_per_prompt=num_images_per_prompt,
-                    **kwargs
-                )
-            elif hasattr(pipeline, 'transformer') and hasattr(pipeline, 'scheduler'):
-                # This appears to be a regular LongCat image pipeline, not an image edit pipeline
-                raise NotImplementedError("DiffusersImageEditGenerator requires an image editing pipeline. "
-                                        "Please use a LongCat image editing model with image_processor_vl attribute, "
-                                        "or use the regular DiffusersImageGenerator node instead.")
-            else:
-                raise NotImplementedError("Image editing not implemented for this pipeline type. "
-                                        "Make sure you're using a LongCat image editing pipeline.")
-
-        except Exception as e:
-            print(f"Error during image editing: {e}")
-            raise e
-
-        # Convert PIL images to tensors
-        images = []
-        for img in result.images:
-            img_array = np.array(img).astype(np.float32) / 255.0
-            img_tensor = torch.from_numpy(img_array).unsqueeze(0)
-            images.append(img_tensor)
-
-        # Stack images if there are multiple
-        if len(images) > 1:
-            final_image = torch.cat(images, dim=0)
-        else:
-            final_image = images[0]
-
-        # Auto-unload LoRA weights after generation to free memory
-        if auto_unload_lora and hasattr(pipeline, 'unload_lora_weights'):
-            pipeline.unload_lora_weights()
-
-        return (final_image,)
-
-
+# Register the nodes
 NODE_CLASS_MAPPINGS = {
-    "LoadLoraOnly": LoadLoraOnly,
-    "LoraLayersOperation": LoraLayersOperation,
-    "MergeLoraToTransformer": MergeLoraToTransformer,
-    "LoraStatViewer": LoraStatViewer,
-    "SaveLora": SaveLora,
-    
-    "DiffusersModelLoader": DiffusersModelLoader,
-    "DiffusersTextEncoderLoader": DiffusersTextEncoderLoader,
-    "DiffusersTransformerLoader": DiffusersTransformerLoader,
-    "DiffusersVAELoader": DiffusersVAELoader,
-    "DiffusersTokenizerLoader": DiffusersTokenizerLoader,
-    "DiffusersPreprocessorLoader": DiffusersPreprocessorLoader,
-    "DiffusersPipelineBuilder": DiffusersPipelineBuilder,
-    "DiffusersLoraLoader": DiffusersLoraLoader,
-    "DiffusersLoraUnloader": DiffusersLoraUnloader,
-    "TextEncodeDiffusersLongCat": TextEncodeDiffusersLongCat,
-    "TextEncodeDiffusersLongCatCached": TextEncodeDiffusersLongCatCached,
-    "TextEncodeDiffusersLongCatImageEdit": TextEncodeDiffusersLongCatImageEdit,
-    "DiffusersImageGenerator": DiffusersImageGenerator,
-    "DiffusersImageEditGenerator": DiffusersImageEditGenerator,
+    "DiffusersPipeline": DiffusersPipeline,
+    "DiffusersTextEncode": DiffusersTextEncode,
+    "DiffusersSampling": DiffusersSampling,
+    "DiffusersLoadLoraOnly": DiffusersLoadLoraOnly,
+    "DiffusersLoraLayersOperation": DiffusersLoraLayersOperation,
+    "DiffusersSaveLora": DiffusersSaveLora,
+    "DiffusersLoraStatViewer": DiffusersLoraStatViewer,
+    "DiffusersMergeLoraToPipeline": DiffusersMergeLoraToPipeline,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "LoadLoraOnly": "Load LoRA Only",
-    "LoraLayersOperation": "LoRA Layers Operation",
-    "MergeLoraToTransformer": "Merge LoRA to Transformer",
-    "LoraStatViewer": "LoRA Stat Viewer",
-    "SaveLora": "Save LoRA",
-    
-    "DiffusersModelLoader": "Load Diffusers Model",
-    "DiffusersTextEncoderLoader": "Load Diffusers Text Encoder",
-    "DiffusersTransformerLoader": "Load Diffusers Transformer",
-    "DiffusersVAELoader": "Load Diffusers VAE",
-    "DiffusersTokenizerLoader": "Load Diffusers Tokenizer",
-    "DiffusersPreprocessorLoader": "Load Diffusers Preprocessor",
-    "DiffusersPipelineBuilder": "Build Diffusers Pipeline from Components",
-    "DiffusersLoraLoader": "Load Diffusers LoRA",
-    "DiffusersLoraUnloader": "Unload Diffusers LoRA",
-    "TextEncodeDiffusersLongCat": "Encode Prompt (Diffusers LongCat)",
-    "TextEncodeDiffusersLongCatCached": "Load Cached Embeddings",
-    "TextEncodeDiffusersLongCatImageEdit": "Encode Prompt + Image (Diffusers LongCat Image Edit)",
-    "DiffusersImageGenerator": "Generate Image (Diffusers)",
-    "DiffusersImageEditGenerator": "Edit Image (Diffusers)",
+    "DiffusersPipeline": "Diffusers Pipeline Loader",
+    "DiffusersTextEncode": "Diffusers Text Encode",
+    "DiffusersSampling": "Diffusers Sampling",
+    "DiffusersLoadLoraOnly": "Diffusers Load LoRA Only",
+    "DiffusersLoraLayersOperation": "Diffusers LoRA Layers Operation",
+    "DiffusersSaveLora": "Diffusers Save LoRA",
+    "DiffusersLoraStatViewer": "Diffusers LoRA Stat Viewer",
+    "DiffusersMergeLoraToPipeline": "Diffusers Merge LoRA to Pipeline",
 }

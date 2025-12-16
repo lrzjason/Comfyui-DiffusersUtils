@@ -1,4 +1,5 @@
-# Copyright 2025 MeiTuan LongCat-Image Team and The HuggingFace Team. All rights reserved.
+# Copied from https://github.com/meituan-longcat/LongCat-Image
+# Copyright 2024 Black Forest Labs and The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -11,39 +12,32 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import inspect
-import math
-import re
-from typing import Any, Dict, List, Optional, Union
 
+from typing import Any, Callable, Dict, List, Optional, Union
+import json
 import numpy as np
-import PIL
 import torch
+import math
 from transformers import Qwen2_5_VLForConditionalGeneration, Qwen2Tokenizer, Qwen2VLProcessor
 
-from diffusers.image_processor import VaeImageProcessor
-from diffusers.loaders import FromSingleFileMixin, FluxLoraLoaderMixin
-from diffusers.models.autoencoders import AutoencoderKL
-from .transformer_longcat_image import LongCatImageTransformer2DModel
-from diffusers.pipelines.pipeline_utils import DiffusionPipeline
+from diffusers.image_processor import PipelineImageInput, VaeImageProcessor
+from diffusers.loaders import FluxLoraLoaderMixin, FromSingleFileMixin, TextualInversionLoaderMixin
+from diffusers.models import AutoencoderKL
 from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
-from diffusers.utils import is_torch_xla_available, logging, replace_example_docstring
-from diffusers.utils.torch_utils import randn_tensor
-from .pipeline_output import LongCatImagePipelineOutput
-
-from .model_utils import (
-    prepare_pos_ids,
-    retrieve_latents,
-    retrieve_timesteps,
-    split_quotation,
-    calculate_shift,
-    calculate_dimensions,
+from diffusers.utils import (
+    USE_PEFT_BACKEND,
+    is_torch_xla_available,
+    logging,
 )
+from diffusers.utils.torch_utils import randn_tensor
+from diffusers.pipelines.pipeline_utils import DiffusionPipeline
 
+from .model_utils import split_quotation, prepare_pos_ids, calculate_shift, retrieve_timesteps, optimized_scale, retrieve_latents, calculate_dimensions
+from .transformer_longcat_image import LongCatImageTransformer2DModel
+from .pipeline_output import LongCatImagePipelineOutput
 
 if is_torch_xla_available():
     import torch_xla.core.xla_model as xm
-
     XLA_AVAILABLE = True
 else:
     XLA_AVAILABLE = False
@@ -51,39 +45,21 @@ else:
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
 
-EXAMPLE_DOC_STRING = """
-    Examples:
-        ```py
-        >>> from PIL import Image
-        >>> import torch
-        >>> from diffusers import LongCatImageEditPipeline
 
-        >>> pipe = LongCatImageEditPipeline.from_pretrained(
-        ...     "meituan-longcat/LongCat-Image-Edit", torch_dtype=torch.bfloat16
-        ... )
-        >>> pipe.to("cuda")
-
-        >>> prompt = "change the cat to dog."
-        >>> input_image = Image.open("test.jpg").convert("RGB")
-        >>> image = pipe(
-        ...     input_image,
-        ...     prompt,
-        ...     num_inference_steps=50,
-        ...     guidance_scale=4.5,
-        ...     generator=torch.Generator("cpu").manual_seed(43),
-        ... ).images[0]
-        >>> image.save("longcat_image_edit.png")
-        ```
-"""
-
-
-class LongCatImageEditPipeline(DiffusionPipeline, FromSingleFileMixin, FluxLoraLoaderMixin):
+class LongCatImageEditPipeline(
+    DiffusionPipeline,
+    FluxLoraLoaderMixin,
+    FromSingleFileMixin,
+    TextualInversionLoaderMixin,
+):
     r"""
-    The LongCat-Image-Edit pipeline for image editing.
+    The pipeline for text-to-image generation.
+
+    Reference: https://blackforestlabs.ai/announcing-black-forest-labs/
     """
 
     model_cpu_offload_seq = "text_encoder->image_encoder->transformer->vae"
-    _optional_components = []
+    _optional_components = ["image_encoder", "feature_extractor", "text_processor"]
     _callback_tensor_inputs = ["latents", "prompt_embeds"]
 
     def __init__(
@@ -107,14 +83,17 @@ class LongCatImageEditPipeline(DiffusionPipeline, FromSingleFileMixin, FluxLoraL
         )
 
         self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1) if getattr(self, "vae", None) else 8
+        # Flux latents are turned into 2x2 patches and packed. This means the latent width and height has to be divisible
+        # by the patch size. So the vae scale factor is multiplied by the patch size to account for this
         self.image_processor = VaeImageProcessor(vae_scale_factor=self.vae_scale_factor * 2)
         self.image_processor_vl = text_processor.image_processor
-
+        
         self.image_token = "<|image_pad|>"
         self.prompt_template_encode_prefix = "<|im_start|>system\nAs an image editing expert, first analyze the content and attributes of the input image(s). Then, based on the user's editing instructions, clearly and precisely determine how to modify the given image(s), ensuring that only the specified parts are altered and all other aspects remain consistent with the original(s).<|im_end|>\n<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>"
-        self.prompt_template_encode_suffix = "<|im_end|>\n<|im_start|>assistant\n"
+        self.prompt_template_encode_suffix = '<|im_end|>\n<|im_start|>assistant\n'
         self.default_sample_size = 128
         self.tokenizer_max_length = 512
+
 
     def _encode_prompt(self, prompt, image):
         raw_vl_input = self.image_processor_vl(images=image, return_tensors="pt")
@@ -188,6 +167,7 @@ class LongCatImageEditPipeline(DiffusionPipeline, FromSingleFileMixin, FluxLoraL
         prompt_embeds = prompt_embeds[:, prefix_len:-suffix_len, :]
         return prompt_embeds
 
+
     def encode_prompt(
         self,
         prompt: List[str] = None,
@@ -202,6 +182,7 @@ class LongCatImageEditPipeline(DiffusionPipeline, FromSingleFileMixin, FluxLoraL
             batch_size = len(prompt)
         else:
             batch_size = prompt_embeds.shape[0]
+            
 
         _, seq_len, _ = prompt_embeds.shape
         # duplicate text embeddings and attention mask for each generation per prompt, using mps friendly method
@@ -237,9 +218,9 @@ class LongCatImageEditPipeline(DiffusionPipeline, FromSingleFileMixin, FluxLoraL
 
         return latents
 
+
     def _encode_vae_image(self, image: torch.Tensor, generator: torch.Generator):
-        image = image.to(torch.device("cuda"), dtype=torch.float32)
-        self.vae = self.vae.to(torch.device("cuda"), dtype=torch.float32)
+        image = image.to(self.vae.device, dtype=self.vae.dtype)
         if isinstance(generator, list):
             image_latents = [
                 retrieve_latents(self.vae.encode(image[i : i + 1]), generator=generator[i], sample_mode="argmax")
@@ -252,9 +233,39 @@ class LongCatImageEditPipeline(DiffusionPipeline, FromSingleFileMixin, FluxLoraL
 
         return image_latents
 
+
     @property
     def do_classifier_free_guidance(self):
         return self._guidance_scale > 1
+    def enable_vae_slicing(self):
+        r"""
+        Enable sliced VAE decoding. When this option is enabled, the VAE will split the input tensor in slices to
+        compute decoding in several steps. This is useful to save some memory and allow larger batch sizes.
+        """
+        self.vae.enable_slicing()
+
+    def disable_vae_slicing(self):
+        r"""
+        Disable sliced VAE decoding. If `enable_vae_slicing` was previously enabled, this method will go back to
+        computing decoding in one step.
+        """
+        self.vae.disable_slicing()
+
+    def enable_vae_tiling(self):
+        r"""
+        Enable tiled VAE decoding. When this option is enabled, the VAE will split the input tensor into tiles to
+        compute decoding and encoding in several steps. This is useful for saving a large amount of memory and to allow
+        processing larger images.
+        """
+        self.vae.enable_tiling()
+
+    def disable_vae_tiling(self):
+        r"""
+        Disable tiled VAE decoding. If `enable_vae_tiling` was previously enabled, this method will go back to
+        computing decoding in one step.
+        """
+        self.vae.disable_tiling()
+
 
     def prepare_latents(
         self,
@@ -268,7 +279,7 @@ class LongCatImageEditPipeline(DiffusionPipeline, FromSingleFileMixin, FluxLoraL
         device,
         generator,
         latents=None,
-    ):
+    ): 
         # VAE applies 8x compression on images but we must also account for packing which requires
         # latent height and width to be divisible by 2.
         height = 2 * (int(height) // (self.vae_scale_factor * 2))
@@ -277,14 +288,15 @@ class LongCatImageEditPipeline(DiffusionPipeline, FromSingleFileMixin, FluxLoraL
         image_latents, image_latents_ids = None, None
 
         if image is not None:
-            image = image.to(device=device, dtype=dtype)
+            image = image.to(device=self.device, dtype=dtype)
 
             if image.shape[1] != self.vae.config.latent_channels:
                 image_latents = self._encode_vae_image(image=image, generator=generator)
             else:
                 image_latents = image
-            
+                
             image_latents = image_latents.to(device=device, dtype=dtype)
+            
             if batch_size > image_latents.shape[0] and batch_size % image_latents.shape[0] == 0:
                 additional_image_per_prompt = batch_size // image_latents.shape[0]
                 image_latents = torch.cat([image_latents] * additional_image_per_prompt, dim=0)
@@ -295,16 +307,17 @@ class LongCatImageEditPipeline(DiffusionPipeline, FromSingleFileMixin, FluxLoraL
             else:
                 image_latents = torch.cat([image_latents], dim=0)
 
-            image_latents = self._pack_latents(image_latents, batch_size, num_channels_latents, height, width)
+            image_latents = self._pack_latents(
+                image_latents, batch_size, num_channels_latents, height, width
+            )
 
-            image_latents_ids = prepare_pos_ids(
-                modality_id=2,
-                type="image",
-                start=(prompt_embeds_length, prompt_embeds_length),
-                height=height // 2,
-                width=width // 2,
-            ).to(device, dtype=torch.float64)
-
+            image_latents_ids = prepare_pos_ids(modality_id=2,
+                                           type='image',
+                                           start=(prompt_embeds_length,
+                                                  prompt_embeds_length),
+                                           height=height//2,
+                                           width=width//2).to(device, dtype=torch.float64)
+        
         shape = (batch_size, num_channels_latents, height, width)
         latents_ids = prepare_pos_ids(
             modality_id=1,
@@ -313,7 +326,6 @@ class LongCatImageEditPipeline(DiffusionPipeline, FromSingleFileMixin, FluxLoraL
             height=height // 2,
             width=width // 2,
         ).to(device)
-
         if isinstance(generator, list) and len(generator) != batch_size:
             raise ValueError(
                 f"You have passed a list of generators of length {len(generator)}, but requested an effective batch"
@@ -326,7 +338,15 @@ class LongCatImageEditPipeline(DiffusionPipeline, FromSingleFileMixin, FluxLoraL
         else:
             latents = latents.to(device=device, dtype=dtype)
 
+        latents_ids = prepare_pos_ids(modality_id=1,
+                                        type='image',
+                                        start=(prompt_embeds_length,
+                                               prompt_embeds_length),
+                                        height=height//2,
+                                        width=width//2).to(device, dtype=torch.float64)
+
         return latents, image_latents, latents_ids, image_latents_ids
+
 
     @property
     def guidance_scale(self):
@@ -347,7 +367,6 @@ class LongCatImageEditPipeline(DiffusionPipeline, FromSingleFileMixin, FluxLoraL
     @property
     def interrupt(self):
         return self._interrupt
-
     def check_inputs(
         self, prompt, height, width, negative_prompt=None, prompt_embeds=None, negative_prompt_embeds=None
     ):
@@ -381,18 +400,17 @@ class LongCatImageEditPipeline(DiffusionPipeline, FromSingleFileMixin, FluxLoraL
                 f" {negative_prompt_embeds}. Please make sure to only forward one of the two."
             )
 
-    @replace_example_docstring(EXAMPLE_DOC_STRING)
     @torch.no_grad()
     def __call__(
         self,
-        image: Optional[PIL.Image.Image] = None,
+        image: Optional[PipelineImageInput] = None,
         prompt: Union[str, List[str]] = None,
         negative_prompt: Union[str, List[str]] = None,
         num_inference_steps: int = 50,
         sigmas: Optional[List[float]] = None,
-        guidance_scale: float = 4.5,
+        guidance_scale: float = 3.5,
         num_images_per_prompt: Optional[int] = 1,
-        generator: Optional[Union[torch.Generator, List[torch.Generator]]] = None,
+        generator: Optional[Union[torch.Generator,List[torch.Generator]]] = None,
         latents: Optional[torch.FloatTensor] = None,
         prompt_embeds: Optional[torch.FloatTensor] = None,
         negative_prompt_embeds: Optional[torch.FloatTensor] = None,
@@ -400,20 +418,11 @@ class LongCatImageEditPipeline(DiffusionPipeline, FromSingleFileMixin, FluxLoraL
         return_dict: bool = True,
         joint_attention_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        r"""
-        Function invoked when calling the pipeline for generation.
 
-        Examples:
-
-        Returns:
-            [`~pipelines.LongCatImagePipelineOutput`] or `tuple`: [`~pipelines.LongCatImagePipelineOutput`] if
-            `return_dict` is True, otherwise a `tuple`. When returning a tuple, the first element is a list with the
-            generated images.
-        """
-
+        image = image[0] if isinstance(image, list) else image
         image_size = image[0].size if isinstance(image, list) else image.size
-        calculated_width, calculated_height = calculate_dimensions(1024 * 1024, image_size[0] * 1.0 / image_size[1])
-
+        calculated_width, calculated_height = calculate_dimensions(1024 * 1024, image_size[0]*1.0/image_size[1])
+        
         # 1. Check inputs. Raise error if not correct
         self.check_inputs(
             prompt,
@@ -423,7 +432,7 @@ class LongCatImageEditPipeline(DiffusionPipeline, FromSingleFileMixin, FluxLoraL
             prompt_embeds=prompt_embeds,
             negative_prompt_embeds=negative_prompt_embeds,
         )
-
+        
         self._guidance_scale = guidance_scale
         self._joint_attention_kwargs = joint_attention_kwargs
         self._current_timestep = None
@@ -436,21 +445,28 @@ class LongCatImageEditPipeline(DiffusionPipeline, FromSingleFileMixin, FluxLoraL
             batch_size = len(prompt)
         else:
             batch_size = prompt_embeds.shape[0]
-
+        
         device = self._execution_device
 
-        # 3. Preprocess image
+        # image = self.image_processor.resize(image, calculated_height, calculated_width)
+        # prompt_image = self.image_processor.resize(image, calculated_height//2, calculated_width//2)
+        # image = self.image_processor.preprocess(image, calculated_height, calculated_width).to(device)
+        
         if image is not None and not (isinstance(image, torch.Tensor) and image.size(1) == self.latent_channels):
             image = self.image_processor.resize(image, calculated_height, calculated_width)
             prompt_image = self.image_processor.resize(image, calculated_height // 2, calculated_width // 2)
             image = self.image_processor.preprocess(image, calculated_height, calculated_width)
 
+        
+        self.vae = self.vae.to(device, dtype=torch.float32)
+        
+        
         negative_prompt = "" if negative_prompt is None else negative_prompt
         (prompt_embeds, text_ids) = self.encode_prompt(
             prompt=prompt, image=prompt_image, prompt_embeds=prompt_embeds, num_images_per_prompt=num_images_per_prompt
         )
-        prompt_embeds = prompt_embeds.to(device)
-        text_ids = text_ids.to(device, dtype=prompt_embeds.dtype)
+        prompt_embeds = prompt_embeds.to(device, dtype=self.dtype)
+        text_ids = text_ids.to(device, dtype=self.dtype)
         if self.do_classifier_free_guidance:
             (negative_prompt_embeds, negative_text_ids) = self.encode_prompt(
                 prompt=negative_prompt,
@@ -458,8 +474,8 @@ class LongCatImageEditPipeline(DiffusionPipeline, FromSingleFileMixin, FluxLoraL
                 prompt_embeds=negative_prompt_embeds,
                 num_images_per_prompt=num_images_per_prompt,
             )
-            negative_prompt_embeds = negative_prompt_embeds.to(device, dtype=prompt_embeds.dtype)
-            negative_text_ids = negative_text_ids.to(device, dtype=prompt_embeds.dtype)
+            negative_prompt_embeds = prompt_embeds.to(device, dtype=self.dtype)
+            negative_text_ids = text_ids.to(device, dtype=self.dtype)
 
         # 4. Prepare latent variables
         num_channels_latents = 16
@@ -467,6 +483,8 @@ class LongCatImageEditPipeline(DiffusionPipeline, FromSingleFileMixin, FluxLoraL
             image,
             batch_size * num_images_per_prompt,
             num_channels_latents,
+            # image.shape[2],
+            # image.shape[3],
             calculated_height,
             calculated_width,
             prompt_embeds.dtype,
@@ -475,6 +493,12 @@ class LongCatImageEditPipeline(DiffusionPipeline, FromSingleFileMixin, FluxLoraL
             generator,
             latents,
         )
+        latents = latents.to(device, dtype=self.dtype)
+        latents_ids = latents_ids.to(device, dtype=self.dtype)
+        if image_latents is not None:
+            image_latents = image_latents.to(device, dtype=self.dtype)
+            image_latents_ids = image_latents_ids.to(device, dtype=self.dtype)
+
 
         # 5. Prepare timesteps
         sigmas = np.linspace(1.0, 1.0 / num_inference_steps, num_inference_steps) if sigmas is None else sigmas
@@ -502,6 +526,11 @@ class LongCatImageEditPipeline(DiffusionPipeline, FromSingleFileMixin, FluxLoraL
         if self.joint_attention_kwargs is None:
             self._joint_attention_kwargs = {}
 
+        # if self.do_classifier_free_guidance:
+        #     prompt_embeds = torch.cat([negative_prompt_embeds, prompt_embeds], dim=0).to(device)
+        # else:
+        #     prompt_embeds = prompt_embeds.to(device)
+
         if image is not None:
             latent_image_ids = torch.cat([latents_ids, image_latents_ids], dim=0)
         else:
@@ -514,12 +543,13 @@ class LongCatImageEditPipeline(DiffusionPipeline, FromSingleFileMixin, FluxLoraL
                     continue
 
                 self._current_timestep = t
-
+                
                 latent_model_input = latents
                 if image_latents is not None:
                     latent_model_input = torch.cat([latents, image_latents], dim=1)
 
                 # latent_model_input = torch.cat([latent_model_input] * 2) if self.do_classifier_free_guidance else latent_model_input
+                timestep = t.expand(latent_model_input.shape[0]).to(latents.dtype)
                 timestep = t.expand(latent_model_input.shape[0]).to(latents.dtype)
                 with self.transformer.cache_context("cond"):
                     noise_pred_text = self.transformer(
@@ -577,7 +607,7 @@ class LongCatImageEditPipeline(DiffusionPipeline, FromSingleFileMixin, FluxLoraL
             image = self.image_processor.postprocess(image, output_type=output_type)
 
         # Offload all models
-        self.maybe_free_model_hooks()
+        # self.maybe_free_model_hooks()
 
         if not return_dict:
             return (image,)
