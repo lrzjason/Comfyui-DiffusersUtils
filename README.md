@@ -4,9 +4,13 @@
 
 A set of nodes which provide flexible inference using diffusers in ComfyUI environment.
 
+**Latest Update (Jan 16, 2026):** Added support for GLM Image models (both text-to-image and image-to-image) with dedicated installation instructions.
+
 ## Current Supported Models:
 - LongCat 6B Image
 - LongCat 6B Image Edit
+- GLM Image (Text-to-Image)
+- GLM Image (Image-to-Image)
 
 ## Installation
 
@@ -22,7 +26,14 @@ cd Comfyui-DiffusersUtils
 pip install -r requirements.txt
 ```
 
-3. Restart ComfyUI
+3. For GLM Image support, also install the following packages:
+```bash
+pip install git+https://github.com/huggingface/transformers.git
+pip install git+https://github.com/huggingface/diffusers.git
+pip install git+https://github.com/huggingface/peft.git
+```
+
+4. Restart ComfyUI
 
 ## Available Nodes
 
@@ -151,6 +162,11 @@ For image editing workflows, use `LongCatImageEditPipeline` with an input image 
 - **QQ Group**: 866612947
 - **Wechatid**: fkdeai
 - **Civitai**: [xiaozhijason](https://civitai.com/user/xiaozhijason)
+
+## Changelog
+
+- **Jan 16, 2026**: Added support for GLM Image models (both text-to-image and image-to-image) with dedicated installation instructions
+- **Earlier**: Initial release with LongCat 6B Image and LongCat 6B Image Edit support
 
 ## Sponsors me for more open source projects:
 <div align="center">
