@@ -1,0 +1,484 @@
+{
+  "id": "e3ef1777-8365-489e-b287-d316d3e3f81d",
+  "revision": 0,
+  "last_node_id": 39,
+  "last_link_id": 66,
+  "nodes": [
+    {
+      "id": 32,
+      "type": "DiffusersTextEncode",
+      "pos": [
+        252.15635331116152,
+        538.8759159153744
+      ],
+      "size": [
+        400,
+        200
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "pipeline",
+          "type": "PIPELINE",
+          "link": 52
+        },
+        {
+          "name": "image",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "widget": {
+            "name": "prompt"
+          },
+          "link": 65
+        }
+      ],
+      "outputs": [
+        {
+          "name": "diffusers_cond",
+          "type": "DIFFUSERS_COND",
+          "links": [
+            58
+          ]
+        }
+      ],
+      "properties": {},
+      "widgets_values": [
+        "",
+        1
+      ]
+    },
+    {
+      "id": 35,
+      "type": "DiffusersGenPriorTokens",
+      "pos": [
+        239.0576892059517,
+        799.0366487415731
+      ],
+      "size": [
+        400,
+        200
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "diffusers_cond",
+          "type": "DIFFUSERS_COND",
+          "link": 58
+        },
+        {
+          "name": "image",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "model_path",
+          "type": "STRING",
+          "widget": {
+            "name": "model_path"
+          },
+          "link": 57
+        },
+        {
+          "name": "prompt",
+          "type": "STRING",
+          "widget": {
+            "name": "prompt"
+          },
+          "link": 66
+        }
+      ],
+      "outputs": [
+        {
+          "name": "diffusers_cond",
+          "type": "DIFFUSERS_COND",
+          "links": [
+            61,
+            63
+          ]
+        }
+      ],
+      "properties": {},
+      "widgets_values": [
+        "F:/HF_Models/GLM/GLM-Image",
+        "Masterpiece, best quality, 8k uhd, photo realistic,",
+        1024,
+        1024
+      ]
+    },
+    {
+      "id": 37,
+      "type": "DiffusersPipeline",
+      "pos": [
+        702.0675103307902,
+        555.5918376091058
+      ],
+      "size": [
+        367.97285290145885,
+        174
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "any",
+          "shape": 7,
+          "type": "*",
+          "link": 61
+        },
+        {
+          "name": "pipeline",
+          "shape": 7,
+          "type": "PIPELINE",
+          "link": 60
+        },
+        {
+          "name": "model_path",
+          "type": "STRING",
+          "widget": {
+            "name": "model_path"
+          },
+          "link": 59
+        }
+      ],
+      "outputs": [
+        {
+          "name": "pipeline",
+          "type": "PIPELINE",
+          "links": [
+            62
+          ]
+        }
+      ],
+      "properties": {},
+      "widgets_values": [
+        "GlmImagePipeline",
+        "",
+        "transformer, vae, scheduler",
+        "text_encoder, tokenizer, text_processor",
+        "bfloat16"
+      ]
+    },
+    {
+      "id": 36,
+      "type": "DiffusersSampling",
+      "pos": [
+        701.507895261683,
+        796.7853526217062
+      ],
+      "size": [
+        306.681640625,
+        262
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "pipeline",
+          "type": "PIPELINE",
+          "link": 62
+        },
+        {
+          "name": "diffusers_cond",
+          "type": "DIFFUSERS_COND",
+          "link": 63
+        },
+        {
+          "name": "negative_diffusers_cond",
+          "shape": 7,
+          "type": "DIFFUSERS_COND",
+          "link": null
+        },
+        {
+          "name": "image",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "links": [
+            64
+          ]
+        }
+      ],
+      "properties": {},
+      "widgets_values": [
+        50,
+        1.5,
+        1,
+        42,
+        "fixed",
+        1024,
+        1024
+      ]
+    },
+    {
+      "id": 38,
+      "type": "PreviewImage",
+      "pos": [
+        1151.668069215871,
+        672.4364139956634
+      ],
+      "size": [
+        334.58463865138765,
+        329.77945066136226
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 64
+        }
+      ],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": []
+    },
+    {
+      "id": 31,
+      "type": "DiffusersPipeline",
+      "pos": [
+        254.16559808241507,
+        314.917988577584
+      ],
+      "size": [
+        367.97285290145885,
+        174
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "any",
+          "shape": 7,
+          "type": "*",
+          "link": null
+        },
+        {
+          "name": "pipeline",
+          "shape": 7,
+          "type": "PIPELINE",
+          "link": null
+        },
+        {
+          "name": "model_path",
+          "type": "STRING",
+          "widget": {
+            "name": "model_path"
+          },
+          "link": 53
+        }
+      ],
+      "outputs": [
+        {
+          "name": "pipeline",
+          "type": "PIPELINE",
+          "links": [
+            52,
+            60
+          ]
+        }
+      ],
+      "properties": {},
+      "widgets_values": [
+        "GlmImagePipeline",
+        "",
+        "tokenizer, text_encoder",
+        "text_encoder, tokenizer, text_processor",
+        "bfloat16"
+      ]
+    },
+    {
+      "id": 34,
+      "type": "PrimitiveStringMultiline",
+      "pos": [
+        -304.60954401292315,
+        534.2342610245049
+      ],
+      "size": [
+        400,
+        200
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": [
+            53,
+            57,
+            59
+          ]
+        }
+      ],
+      "properties": {},
+      "widgets_values": [
+        "F:\\HF_Models\\GLM\\GLM-Image"
+      ]
+    },
+    {
+      "id": 39,
+      "type": "PrimitiveStringMultiline",
+      "pos": [
+        -299.4612360765092,
+        780.8385959879089
+      ],
+      "size": [
+        400,
+        200
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "STRING",
+          "type": "STRING",
+          "links": [
+            65,
+            66
+          ]
+        }
+      ],
+      "properties": {},
+      "widgets_values": [
+        "A beautifully designed modern food magazine style dessert recipe illustration, themed around a raspberry mousse cake. The overall layout is clean and bright, divided into four main areas: the top left features a bold black title 'Raspberry Mousse Cake Recipe Guide', with a soft-lit close-up photo of the finished cake on the right, showcasing a light pink cake adorned with fresh raspberries and mint leaves; the bottom left contains an ingredient list section, titled 'Ingredients' in a simple font, listing 'Flour 150g', 'Eggs 3', 'Sugar 120g', 'Raspberry puree 200g', 'Gelatin sheets 10g', 'Whipping cream 300ml', and 'Fresh raspberries', each accompanied by minimalist line icons (like a flour bag, eggs, sugar jar, etc.); the bottom right displays four equally sized step boxes, each containing high-definition macro photos and corresponding instructions, arranged from top to bottom as follows: Step 1 shows a whisk whipping white foam (with the instruction 'Whip egg whites to stiff peaks'), Step 2 shows a red-and-white mixture being folded with a spatula (with the instruction 'Gently fold in the puree and batter'), Step 3 shows pink liquid being poured into a round mold (with the instruction 'Pour into mold and chill for 4 hours'), Step 4 shows the finished cake decorated with raspberries and mint leaves (with the instruction 'Decorate with raspberries and mint'); a light brown information bar runs along the bottom edge, with icons on the left representing 'Preparation time: 30 minutes', 'Cooking time: 20 minutes', and 'Servings: 8'. The overall color scheme is dominated by creamy white and light pink, with a subtle paper texture in the background, featuring compact and orderly text and image layout with clear information hierarchy."
+      ]
+    }
+  ],
+  "links": [
+    [
+      52,
+      31,
+      0,
+      32,
+      0,
+      "PIPELINE"
+    ],
+    [
+      53,
+      34,
+      0,
+      31,
+      2,
+      "STRING"
+    ],
+    [
+      57,
+      34,
+      0,
+      35,
+      2,
+      "STRING"
+    ],
+    [
+      58,
+      32,
+      0,
+      35,
+      0,
+      "DIFFUSERS_COND"
+    ],
+    [
+      59,
+      34,
+      0,
+      37,
+      2,
+      "STRING"
+    ],
+    [
+      60,
+      31,
+      0,
+      37,
+      1,
+      "PIPELINE"
+    ],
+    [
+      61,
+      35,
+      0,
+      37,
+      0,
+      "DIFFUSERS_COND"
+    ],
+    [
+      62,
+      37,
+      0,
+      36,
+      0,
+      "PIPELINE"
+    ],
+    [
+      63,
+      35,
+      0,
+      36,
+      1,
+      "DIFFUSERS_COND"
+    ],
+    [
+      64,
+      36,
+      0,
+      38,
+      0,
+      "IMAGE"
+    ],
+    [
+      65,
+      39,
+      0,
+      32,
+      2,
+      "STRING"
+    ],
+    [
+      66,
+      39,
+      0,
+      35,
+      3,
+      "STRING"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.5730855330117126,
+      "offset": [
+        589.6732729939714,
+        -23.377781431740477
+      ]
+    },
+    "frontendVersion": "1.35.9",
+    "workflowRendererVersion": "LG"
+  },
+  "version": 0.4
+}

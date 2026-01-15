@@ -1,5 +1,9 @@
 import torch
 import os
+import sys
+import subprocess
+import tempfile
+import json
 from PIL import Image
 import numpy as np
 import gc
@@ -27,7 +31,9 @@ from diffusers import FlowMatchEulerDiscreteScheduler
 from diffusers.models.autoencoders import AutoencoderKL
 from transformers import Qwen2_5_VLForConditionalGeneration, Qwen2Tokenizer, Qwen2VLProcessor
 from .longcat.transformer_longcat_image import LongCatImageTransformer2DModel
-
+from .glm_image.pipeline_glm_image import GlmImagePipeline
+from transformers import ByT5Tokenizer, T5EncoderModel, GlmImageForConditionalGeneration, GlmImageProcessor
+from diffusers.models import GlmImageTransformer2DModel
 
 # Map pipeline names to their classes with their available components
 pipeline_registry = {
@@ -51,6 +57,18 @@ pipeline_registry = {
             'tokenizer': Qwen2Tokenizer,
             'text_processor': Qwen2VLProcessor,
             'transformer': LongCatImageTransformer2DModel
+        }
+    },
+    'GlmImagePipeline': {
+        'class': GlmImagePipeline,
+        'components': {
+            'scheduler': FlowMatchEulerDiscreteScheduler,
+            'vae': AutoencoderKL, 
+            'text_encoder': T5EncoderModel,  # GLM specific component
+            'tokenizer': ByT5Tokenizer,  # GLM specific component
+            'processor': GlmImageProcessor,  # GLM specific component
+            'transformer': GlmImageTransformer2DModel,  # GLM specific component
+            'vision_language_encoder': GlmImageForConditionalGeneration,  # GLM specific component
         }
     }
 }
@@ -135,6 +153,136 @@ class DiffusersTextEncode:
         return (cond, )
 
 
+
+class DiffusersGenPriorTokens:
+    """
+    Node to generate prior tokens for GLM pipeline using generate_prior_tokens method.
+    
+    This node takes a pipeline, prompt, and optional image to generate prior tokens
+    that can be used in the GLM image generation process.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model_path": ("STRING", {"default": "F:/HF_Models/GLM/GLM-Image"}),
+                "diffusers_cond": ("DIFFUSERS_COND",),
+                "prompt": ("STRING", {"multiline": True, "default": "Masterpiece, best quality, 8k uhd, photo realistic,"}),
+            },
+            "optional": {
+                "image": ("IMAGE",),  # Optional image input for image-to-image
+                "width": ("INT", {"default": 1024, "min": 256, "max": 4096, "step": 64}),
+                "height": ("INT", {"default": 1024, "min": 256, "max": 4096, "step": 64}),
+            }
+        }
+
+    RETURN_TYPES = ("DIFFUSERS_COND",)
+    RETURN_NAMES = ("diffusers_cond",)
+    FUNCTION = "generate_prior_tokens"
+    CATEGORY = "Diffusers/GLM"
+
+    def generate_prior_tokens(self, model_path, diffusers_cond, prompt, image=None, width=1024, height=1024):
+        """
+        Generates prior tokens using an isolated subprocess to ensure consistent environment.
+        
+        Args:
+            model_path: Path to the GLM model
+            diffusers_cond: Conditioning from DiffusersTextEncode node
+            prompt: Text prompt to generate prior tokens for
+            image: Optional image for image-to-image generation
+            width: Width for the generation
+            height: Height for the generation
+        
+        Returns:
+            tuple: Updated diffusers_cond with prior tokens included
+        """
+        import subprocess
+        import tempfile
+        import json
+        import time
+        
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        # Convert image tensor to PIL if provided
+        image_list = None
+        if image is not None:
+            # Convert image tensor to PIL for GLM pipeline
+            if len(image.shape) == 4:
+                # [B, H, W, C] format
+                image_tensor = image[0] if image.shape[0] > 1 else image.squeeze(0)
+            else:
+                image_tensor = image
+            
+            # Convert from [0,1] to [0,255] and to numpy
+            image_np = (image_tensor * 255).byte().numpy()
+            image_pil = Image.fromarray(image_np.astype(np.uint8))
+            image_list = [image_pil]
+        
+        # Use isolated subprocess for prior token generation
+        print("Generating prior tokens in isolated environment...")
+        
+        # Use a temporary file for the prior tokens
+        temp_prior_tokens_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"temp_prior_tokens_{int(time.time())}.pt")
+        
+        # Create a temporary file for the subprocess to write results
+        with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.json') as temp_result_file:
+            temp_result_path = temp_result_file.name
+        
+        try:
+            cmd = [
+                sys.executable,  # Use the same Python interpreter
+                os.path.join(os.path.dirname(os.path.abspath(__file__)), "generate_prior_tokens_isolated.py"),
+                "--model_path", model_path,
+                "--prompt", prompt,
+                "--height", str(height),
+                "--width", str(width),
+                "--output_path", temp_prior_tokens_path,
+                "--device", "cuda" if torch.cuda.is_available() else "cpu",
+                "--dtype", "bfloat16"  # Match the dtype used elsewhere
+            ]
+            
+            # Run the isolated prior token generation
+            result = subprocess.run(cmd, capture_output=True, text=True, cwd=os.path.dirname(__file__))
+            
+            if result.returncode != 0:
+                print(f"Error in isolated prior token generation: {result.stderr}")
+                raise RuntimeError(f"Prior token generation failed: {result.stderr}")
+            
+            # Parse the result
+            result_json = json.loads(result.stdout.strip())
+            if not result_json.get("success", False):
+                error_msg = result_json.get("error", "Unknown error")
+                print(f"Prior token generation failed: {error_msg}")
+                raise RuntimeError(f"Prior token generation failed: {error_msg}")
+            
+            # Load the generated prior tokens
+            prior_tokens_data = torch.load(temp_prior_tokens_path)
+            prior_token_ids = prior_tokens_data["prior_token_ids"].to(device=device, dtype=torch.long)
+            prior_image_token_ids = prior_tokens_data.get("prior_image_token_ids", None)
+            if prior_image_token_ids is not None:
+                prior_image_token_ids = prior_image_token_ids.to(device=device, dtype=torch.long)
+            
+            print(f"Successfully generated prior tokens: {result_json}")
+            
+            # Create prior_tokens tuple like the original pipeline
+            prior_tokens = (prior_token_ids, prior_image_token_ids)
+            
+        finally:
+            # Clean up temporary files
+            if os.path.exists(temp_prior_tokens_path):
+                os.unlink(temp_prior_tokens_path)
+            if os.path.exists(temp_result_path):
+                os.unlink(temp_result_path)
+        
+        # Create updated diffusers_cond with prior tokens included
+        diffusers_cond["width"] = width
+        diffusers_cond["height"] = height
+        diffusers_cond["prior_tokens"] = prior_tokens
+        
+        return (diffusers_cond,)
+
+
 class DiffusersPipeline:
     """
     A flexible node that can initialize different LongCat diffusion pipelines with dynamic components.
@@ -147,7 +295,7 @@ class DiffusersPipeline:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "pipeline_class_name": (["LongCatImagePipeline", "LongCatImageEditPipeline"], {"default": "LongCatImagePipeline"}),
+                "pipeline_class_name": (["LongCatImagePipeline", "LongCatImageEditPipeline", "GlmImagePipeline"], {"default": "GlmImagePipeline"}),
                 "model_path": ("STRING", {"default": ""}),  # Updated default for LongCat
             },
             "optional": {
@@ -248,6 +396,14 @@ class DiffusersPipeline:
                     components_dict[comp_name] = comp_class.from_pretrained(
                         model_path, subfolder=comp_name
                     )
+                elif comp_name == 'processor':
+                    components_dict[comp_name] = comp_class.from_pretrained(
+                        model_path, subfolder=comp_name
+                    )
+                elif comp_name == 'vision_language_encoder':
+                    components_dict[comp_name] = comp_class.from_pretrained(
+                        model_path, subfolder=comp_name
+                    )
             else:
                 # Set to None if not in requested components
                 components_dict[comp_name] = None
@@ -300,6 +456,227 @@ def get_prompt_embeds(diffusers_cond):
         prompt_embeds = encoded_output
     
     return prompt_embeds
+
+
+def get_prior_tokens(diffusers_cond):
+    # Extract conditioning information from diffusers_cond
+    # The encode_prompt method returns an encoded_output that could be various formats
+    prior_tokens = diffusers_cond["prior_tokens"]
+    prior_token_ids = None
+    prior_image_token_ids = None
+    # Extract the actual prompt embeddings from the encoded output
+    # Based on how encode_prompt is typically implemented, it might return different structures
+    if isinstance(prior_tokens, tuple):
+        # If it's a tuple like (prompt_embeds, text_ids), extract the first element which is prompt_embeds
+        prior_token_ids = prior_tokens[0] if len(prior_tokens) > 0 else None
+        prior_image_token_ids = prior_tokens[1] if len(prior_tokens) > 1 else None
+    elif isinstance(prior_tokens, dict):
+        # If it's a dict, try common keys used for embeddings
+        if 'prior_token_ids' in prior_tokens:
+            prior_token_ids = prior_tokens['prior_token_ids']
+        if 'prior_image_token_ids' in prior_tokens:
+            prior_image_token_ids = prior_tokens['prior_image_token_ids']
+    elif isinstance(prior_tokens, torch.Tensor):
+        # If it's directly a tensor, use it
+        prior_token_ids = prior_tokens
+    else:
+        # Fallback: assume it's something we can use directly or convert to tensor
+        prior_token_ids = prior_tokens
+        
+    return prior_token_ids, prior_image_token_ids
+
+
+class GLMImageGenerateNode:
+    """
+    A node that implements the complete GLM image generation logic with caching,
+    following the same pattern as test_glm_cache_emb.py.
+    This node is self-contained and handles pipeline loading, prompt encoding,
+    prior token generation, and image generation in multiple stages.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model_path": ("STRING", {"default": "F:/HF_Models/GLM/GLM-Image"}),
+                "seed": ("INT", {"default": 42, "min": 0, "max": 0xffffffffffffffff}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("image",)
+    FUNCTION = "generate"
+    CATEGORY = "Diffusers/GLM"
+
+    def generate(self, model_path, seed):
+        import time
+        device = torch.device("cuda")
+        dtype = torch.bfloat16
+        
+        # Define parameters as in test_glm_cache_emb.py
+        width = 1024
+        height = 1024
+        prompt = "A beautifully designed modern food magazine style dessert recipe illustration, themed around a raspberry mousse cake. The overall layout is clean and bright, divided into four main areas: the top left features a bold black title 'Raspberry Mousse Cake Recipe Guide', with a soft-lit close-up photo of the finished cake on the right, showcasing a light pink cake adorned with fresh raspberries and mint leaves; the bottom left contains an ingredient list section, titled 'Ingredients' in a simple font, listing 'Flour 150g', 'Eggs 3', 'Sugar 120g', 'Raspberry puree 200g', 'Gelatin sheets 10g', 'Whipping cream 300ml', and 'Fresh raspberries', each accompanied by minimalist line icons (like a flour bag, eggs, sugar jar, etc.); the bottom right displays four equally sized step boxes, each containing high-definition macro photos and corresponding instructions, arranged from top to bottom as follows: Step 1 shows a whisk whipping white foam (with the instruction 'Whip egg whites to stiff peaks'), Step 2 shows a red-and-white mixture being folded with a spatula (with the instruction 'Gently fold in the puree and batter'), Step 3 shows pink liquid being poured into a round mold (with the instruction 'Pour into mold and chill for 4 hours'), Step 4 shows the finished cake decorated with raspberries and mint leaves (with the instruction 'Decorate with raspberries and mint'); a light brown information bar runs along the bottom edge, with icons on the left representing 'Preparation time: 30 minutes', 'Cooking time: 20 minutes', and 'Servings: 8'. The overall color scheme is dominated by creamy white and light pink, with a subtle paper texture in the background, featuring compact and orderly text and image layout with clear information hierarchy."
+        # Use absolute paths for embeddings and prior tokens to ensure they're stored in the right location
+        base_embedding_path = os.path.join(os.path.dirname(__file__), "glm_base_embedding.pt")
+        prior_tokens_path = os.path.join(os.path.dirname(__file__), "glm_prior_tokens.pt")
+        seed = 42
+        step = 50
+        guidance_scale = 1.5
+        
+        # Convert image tensor to PIL if provided
+        cond_image_list = None
+        
+        generator = torch.Generator(device=device).manual_seed(seed)
+        
+        # Stage 1: Encode Prompt (or load cached)
+        if os.path.exists(base_embedding_path):
+            print("Loading cached prompt embeddings...")
+            base_embedding = torch.load(base_embedding_path)
+            prompt_embeds = base_embedding["prompt_embeds"]
+            negative_prompt_embeds = torch.zeros_like(prompt_embeds)
+        else:
+            print("Encoding prompt...")
+            # Load text encoder components only
+            text_pipeline = GlmImagePipeline.from_pretrained(
+                model_path,
+                vision_language_encoder=None,
+                transformer=None,
+                vae=None,
+                torch_dtype=dtype,
+            ).to(device)
+            
+            with torch.no_grad():
+                prompt_embeds, negative_prompt_embeds = text_pipeline.encode_prompt(prompt)
+            
+            negative_prompt_embeds = torch.zeros_like(prompt_embeds)
+            base_embedding = {
+                "prompt_embeds": prompt_embeds,
+                "negative_prompt_embeds": negative_prompt_embeds,
+            }
+            torch.save(base_embedding, base_embedding_path)
+            
+            del text_pipeline
+            gc.collect()
+            torch.cuda.empty_cache()
+        
+        
+        # Stage 2: Generate Prior Tokens (or load cached)
+        if os.path.exists(prior_tokens_path):
+            print("Loading cached prior tokens...")
+            prior_tokens_data = torch.load(prior_tokens_path)
+            prior_token_ids = prior_tokens_data["prior_token_ids"]
+            prior_image_token_ids = prior_tokens_data.get("prior_image_token_ids", None)
+            
+        else:
+            print("Generating prior tokens in isolated environment...")
+            # Generate prior tokens in isolated subprocess to ensure consistent environment
+            import subprocess
+            import tempfile
+            import json
+            
+            # Create a temporary file for the subprocess to write results
+            with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.json') as temp_result_file:
+                temp_result_path = temp_result_file.name
+            
+            try:
+                # Prepare arguments for subprocess
+                cmd = [
+                    sys.executable,  # Use the same Python interpreter
+                    "generate_prior_tokens_isolated.py",
+                    "--model_path", model_path,
+                    "--prompt", prompt,
+                    "--height", str(height),
+                    "--width", str(width),
+                    "--output_path", prior_tokens_path,
+                    "--device", "cuda" if torch.cuda.is_available() else "cpu",
+                    "--dtype", "bfloat16"  # Match the dtype used elsewhere
+                ]
+                
+                # Run the isolated prior token generation
+                result = subprocess.run(cmd, capture_output=True, text=True, cwd=os.path.dirname(__file__))
+                
+                if result.returncode != 0:
+                    print(f"Error in isolated prior token generation: {result.stderr}")
+                    raise RuntimeError(f"Prior token generation failed: {result.stderr}")
+                
+                # Parse the result
+                result_json = json.loads(result.stdout.strip())
+                if not result_json.get("success", False):
+                    error_msg = result_json.get("error", "Unknown error")
+                    print(f"Prior token generation failed: {error_msg}")
+                    raise RuntimeError(f"Prior token generation failed: {error_msg}")
+                
+                # Load the generated prior tokens
+                prior_tokens_data = torch.load(prior_tokens_path)
+                prior_token_ids = prior_tokens_data["prior_token_ids"]
+                prior_image_token_ids = prior_tokens_data.get("prior_image_token_ids", None)
+                
+                print(f"Successfully generated prior tokens: {result_json}")
+                
+            finally:
+                # Clean up temporary file
+                if os.path.exists(temp_result_path):
+                    os.unlink(temp_result_path)
+            
+            # Note: No need to delete text_pipeline here since it was in subprocess
+        
+        # to device and dtype
+        prior_token_ids = prior_token_ids.to(device=device, dtype=torch.long)
+        if prior_image_token_ids is not None:
+            prior_image_token_ids = prior_image_token_ids.to(device=device, dtype=torch.long)
+        # Stage 3: Load Full Pipeline for Image Generation
+        print("Loading GLM pipeline for generation...")
+        pipe = GlmImagePipeline.from_pretrained(
+            model_path,
+            text_encoder=None,
+            vision_language_encoder=None,
+            torch_dtype=dtype,
+        ).to(device)
+        
+        pipe.enable_model_cpu_offload()
+        
+        # Stage 4: Image Generation
+        print("Generating image...")
+        with torch.no_grad():
+            result = pipe(
+                prompt_embeds=prompt_embeds,
+                negative_prompt_embeds=negative_prompt_embeds,
+                prior_token_ids=prior_token_ids,
+                prior_image_token_ids=prior_image_token_ids,
+                image=cond_image_list,  # Conditional image for image-to-image
+                height=height,
+                width=width,
+                num_inference_steps=step,
+                guidance_scale=guidance_scale,
+                generator=generator,
+            )
+        
+        # Clean up
+        del pipe
+        gc.collect()
+        torch.cuda.empty_cache()
+        
+        # Convert PIL images to tensors in ComfyUI format
+        images = []
+        for img in result.images:
+            # Convert PIL image to numpy array in [H, W, C] format with values in [0, 1]
+            img_array = np.array(img).astype(np.float32) / 255.0
+            # Convert to torch tensor with shape [H, W, C]
+            img_tensor = torch.from_numpy(img_array)
+            # Ensure it's in the right format [H, W, C]
+            if img_tensor.dim() == 3:
+                # Add batch dimension if not already present
+                img_tensor = img_tensor.unsqueeze(0)  # Add batch dimension at index 0 to make [B, H, W, C]
+            images.append(img_tensor)
+
+        # Stack images if there are multiple
+        if len(images) > 1:
+            final_image = torch.cat(images, dim=0)  # Concatenate along batch dimension
+        else:
+            final_image = images[0]
+            
+        return (final_image,)
 
 # def is_edit_pipeline(pipeline):
 #     # get pipeline class
@@ -365,29 +742,48 @@ class DiffusersSampling:
         prompt_embeds = get_prompt_embeds(diffusers_cond)
         prompt_embeds = prompt_embeds.to(device)
 
-        if negative_diffusers_cond is not None:
-            negative_prompt_embeds = get_prompt_embeds(negative_diffusers_cond)
-        else:
-            negative_prompt_embeds = torch.zeros_like(prompt_embeds)
-
         # Check if this is an image editing pipeline by looking for image input
         # is_image_edit = is_edit_pipeline(pipeline)
 
         # Prepare kwargs for pipeline call
+        
+        if "height" in diffusers_cond:
+            height = diffusers_cond["height"]
+        if "width" in diffusers_cond:
+            width = diffusers_cond["width"]
+        
         pipeline_kwargs = {
             "prompt_embeds": prompt_embeds,
             "num_inference_steps": steps,
             "guidance_scale": cfg,
             "generator": generator,
             "num_images_per_prompt": num_images_per_prompt,
+            "height": height,
+            "width": width
         }
-
-        # Add negative prompt only if it's available
-        if negative_prompt_embeds is not None:
+        
+        if negative_diffusers_cond is not None:
+            negative_prompt_embeds = get_prompt_embeds(negative_diffusers_cond)
+        else:
+            negative_prompt_embeds = torch.zeros_like(prompt_embeds)
             pipeline_kwargs["negative_prompt_embeds"] = negative_prompt_embeds
-
-        # Handle image editing vs regular generation based on pipeline type and input
+            
+        if "prior_tokens" in diffusers_cond:
+            # Check if diffusers_cond contains prior tokens
+            prior_token_ids, prior_image_token_ids = get_prior_tokens(diffusers_cond)
+            # print("diffusers_prior_tokens", diffusers_prior_tokens)
+            # Handle GLM pipeline with prior tokens from diffusers_cond
+            if prior_token_ids is not None:
+                # Use prior tokens from diffusers_cond
+                pipeline_kwargs["prior_token_ids"] = prior_token_ids
+                pipeline_kwargs["prior_image_token_ids"] = prior_image_token_ids
+                # pipeline_kwargs["height"] = diffusers_prior_tokens.get("height", height)
+                # pipeline_kwargs["width"] = diffusers_prior_tokens.get("width", width)
+                
+            # result = pipeline(**pipeline_kwargs)
+        pipeline_kwargs["image"] = None
         if image is not None:
+            # Handle image editing vs regular generation based on pipeline type and input
             # Get input image dimensions
             if len(image.shape) == 4:
                 # [B, H, W, C] format
@@ -435,12 +831,9 @@ class DiffusersSampling:
             # Add image for image editing pipeline
             # The LongCat pipeline expects a list of PIL images for the 'image' parameter
             pipeline_kwargs["image"] = [image_pil]
-            result = pipeline(**pipeline_kwargs)
-        else:
-            # For regular generation, use the provided width and height
-            pipeline_kwargs["height"] = height
-            pipeline_kwargs["width"] = width
-            result = pipeline(**pipeline_kwargs)
+            
+        print("pipeline_kwargs", pipeline_kwargs)
+        result = pipeline(**pipeline_kwargs)
 
         # Convert PIL images to tensors in ComfyUI format
         images = []
@@ -461,9 +854,9 @@ class DiffusersSampling:
         else:
             final_image = images[0]
             
-        pipeline.unload_lora_weights()
+        if hasattr(pipeline, 'unload_lora_weights'):
+            pipeline.unload_lora_weights()
         return (final_image,)
-
 
 def get_lora_dir_filename(lora_path):
     if not os.path.exists(lora_path):
@@ -811,6 +1204,8 @@ NODE_CLASS_MAPPINGS = {
     "DiffusersSaveLora": DiffusersSaveLora,
     "DiffusersLoraStatViewer": DiffusersLoraStatViewer,
     "DiffusersMergeLoraToPipeline": DiffusersMergeLoraToPipeline,
+    "DiffusersGenPriorTokens": DiffusersGenPriorTokens,
+    "GLMImageGenerateNode": GLMImageGenerateNode,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -822,4 +1217,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "DiffusersSaveLora": "Diffusers Save LoRA",
     "DiffusersLoraStatViewer": "Diffusers LoRA Stat Viewer",
     "DiffusersMergeLoraToPipeline": "Diffusers Merge LoRA to Pipeline",
+    "DiffusersGenPriorTokens": "Diffusers Generate Prior Tokens",
+    "GLMImageGenerateNode": "GLM Image Generate (with Cache)",
 }
