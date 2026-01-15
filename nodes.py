@@ -201,8 +201,21 @@ class DiffusersGenPriorTokens:
         import tempfile
         import json
         import time
+        import glob
+        import os
         
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        # Clean up any existing temporary files from previous interrupted runs
+        temp_pattern = os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp_prior_tokens_*.pt")
+        existing_temp_files = glob.glob(temp_pattern)
+        for temp_file in existing_temp_files:
+            try:
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
+                    print(f"Cleaned up leftover temporary file: {temp_file}")
+            except Exception as e:
+                print(f"Could not remove temporary file {temp_file}: {e}")
         
         # Convert image tensor to PIL if provided
         image_list = None
@@ -485,207 +498,6 @@ def get_prior_tokens(diffusers_cond):
         
     return prior_token_ids, prior_image_token_ids
 
-
-class GLMImageGenerateNode:
-    """
-    A node that implements the complete GLM image generation logic with caching,
-    following the same pattern as test_glm_cache_emb.py.
-    This node is self-contained and handles pipeline loading, prompt encoding,
-    prior token generation, and image generation in multiple stages.
-    """
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "model_path": ("STRING", {"default": "F:/HF_Models/GLM/GLM-Image"}),
-                "seed": ("INT", {"default": 42, "min": 0, "max": 0xffffffffffffffff}),
-            },
-        }
-
-    RETURN_TYPES = ("IMAGE",)
-    RETURN_NAMES = ("image",)
-    FUNCTION = "generate"
-    CATEGORY = "Diffusers/GLM"
-
-    def generate(self, model_path, seed):
-        import time
-        device = torch.device("cuda")
-        dtype = torch.bfloat16
-        
-        # Define parameters as in test_glm_cache_emb.py
-        width = 1024
-        height = 1024
-        prompt = "A beautifully designed modern food magazine style dessert recipe illustration, themed around a raspberry mousse cake. The overall layout is clean and bright, divided into four main areas: the top left features a bold black title 'Raspberry Mousse Cake Recipe Guide', with a soft-lit close-up photo of the finished cake on the right, showcasing a light pink cake adorned with fresh raspberries and mint leaves; the bottom left contains an ingredient list section, titled 'Ingredients' in a simple font, listing 'Flour 150g', 'Eggs 3', 'Sugar 120g', 'Raspberry puree 200g', 'Gelatin sheets 10g', 'Whipping cream 300ml', and 'Fresh raspberries', each accompanied by minimalist line icons (like a flour bag, eggs, sugar jar, etc.); the bottom right displays four equally sized step boxes, each containing high-definition macro photos and corresponding instructions, arranged from top to bottom as follows: Step 1 shows a whisk whipping white foam (with the instruction 'Whip egg whites to stiff peaks'), Step 2 shows a red-and-white mixture being folded with a spatula (with the instruction 'Gently fold in the puree and batter'), Step 3 shows pink liquid being poured into a round mold (with the instruction 'Pour into mold and chill for 4 hours'), Step 4 shows the finished cake decorated with raspberries and mint leaves (with the instruction 'Decorate with raspberries and mint'); a light brown information bar runs along the bottom edge, with icons on the left representing 'Preparation time: 30 minutes', 'Cooking time: 20 minutes', and 'Servings: 8'. The overall color scheme is dominated by creamy white and light pink, with a subtle paper texture in the background, featuring compact and orderly text and image layout with clear information hierarchy."
-        # Use absolute paths for embeddings and prior tokens to ensure they're stored in the right location
-        base_embedding_path = os.path.join(os.path.dirname(__file__), "glm_base_embedding.pt")
-        prior_tokens_path = os.path.join(os.path.dirname(__file__), "glm_prior_tokens.pt")
-        seed = 42
-        step = 50
-        guidance_scale = 1.5
-        
-        # Convert image tensor to PIL if provided
-        cond_image_list = None
-        
-        generator = torch.Generator(device=device).manual_seed(seed)
-        
-        # Stage 1: Encode Prompt (or load cached)
-        if os.path.exists(base_embedding_path):
-            print("Loading cached prompt embeddings...")
-            base_embedding = torch.load(base_embedding_path)
-            prompt_embeds = base_embedding["prompt_embeds"]
-            negative_prompt_embeds = torch.zeros_like(prompt_embeds)
-        else:
-            print("Encoding prompt...")
-            # Load text encoder components only
-            text_pipeline = GlmImagePipeline.from_pretrained(
-                model_path,
-                vision_language_encoder=None,
-                transformer=None,
-                vae=None,
-                torch_dtype=dtype,
-            ).to(device)
-            
-            with torch.no_grad():
-                prompt_embeds, negative_prompt_embeds = text_pipeline.encode_prompt(prompt)
-            
-            negative_prompt_embeds = torch.zeros_like(prompt_embeds)
-            base_embedding = {
-                "prompt_embeds": prompt_embeds,
-                "negative_prompt_embeds": negative_prompt_embeds,
-            }
-            torch.save(base_embedding, base_embedding_path)
-            
-            del text_pipeline
-            gc.collect()
-            torch.cuda.empty_cache()
-        
-        
-        # Stage 2: Generate Prior Tokens (or load cached)
-        if os.path.exists(prior_tokens_path):
-            print("Loading cached prior tokens...")
-            prior_tokens_data = torch.load(prior_tokens_path)
-            prior_token_ids = prior_tokens_data["prior_token_ids"]
-            prior_image_token_ids = prior_tokens_data.get("prior_image_token_ids", None)
-            
-        else:
-            print("Generating prior tokens in isolated environment...")
-            # Generate prior tokens in isolated subprocess to ensure consistent environment
-            import subprocess
-            import tempfile
-            import json
-            
-            # Create a temporary file for the subprocess to write results
-            with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix='.json') as temp_result_file:
-                temp_result_path = temp_result_file.name
-            
-            try:
-                # Prepare arguments for subprocess
-                cmd = [
-                    sys.executable,  # Use the same Python interpreter
-                    "generate_prior_tokens_isolated.py",
-                    "--model_path", model_path,
-                    "--prompt", prompt,
-                    "--height", str(height),
-                    "--width", str(width),
-                    "--output_path", prior_tokens_path,
-                    "--device", "cuda" if torch.cuda.is_available() else "cpu",
-                    "--dtype", "bfloat16"  # Match the dtype used elsewhere
-                ]
-                
-                # Run the isolated prior token generation
-                result = subprocess.run(cmd, capture_output=True, text=True, cwd=os.path.dirname(__file__))
-                
-                if result.returncode != 0:
-                    print(f"Error in isolated prior token generation: {result.stderr}")
-                    raise RuntimeError(f"Prior token generation failed: {result.stderr}")
-                
-                # Parse the result
-                result_json = json.loads(result.stdout.strip())
-                if not result_json.get("success", False):
-                    error_msg = result_json.get("error", "Unknown error")
-                    print(f"Prior token generation failed: {error_msg}")
-                    raise RuntimeError(f"Prior token generation failed: {error_msg}")
-                
-                # Load the generated prior tokens
-                prior_tokens_data = torch.load(prior_tokens_path)
-                prior_token_ids = prior_tokens_data["prior_token_ids"]
-                prior_image_token_ids = prior_tokens_data.get("prior_image_token_ids", None)
-                
-                print(f"Successfully generated prior tokens: {result_json}")
-                
-            finally:
-                # Clean up temporary file
-                if os.path.exists(temp_result_path):
-                    os.unlink(temp_result_path)
-            
-            # Note: No need to delete text_pipeline here since it was in subprocess
-        
-        # to device and dtype
-        prior_token_ids = prior_token_ids.to(device=device, dtype=torch.long)
-        if prior_image_token_ids is not None:
-            prior_image_token_ids = prior_image_token_ids.to(device=device, dtype=torch.long)
-        # Stage 3: Load Full Pipeline for Image Generation
-        print("Loading GLM pipeline for generation...")
-        pipe = GlmImagePipeline.from_pretrained(
-            model_path,
-            text_encoder=None,
-            vision_language_encoder=None,
-            torch_dtype=dtype,
-        ).to(device)
-        
-        pipe.enable_model_cpu_offload()
-        
-        # Stage 4: Image Generation
-        print("Generating image...")
-        with torch.no_grad():
-            result = pipe(
-                prompt_embeds=prompt_embeds,
-                negative_prompt_embeds=negative_prompt_embeds,
-                prior_token_ids=prior_token_ids,
-                prior_image_token_ids=prior_image_token_ids,
-                image=cond_image_list,  # Conditional image for image-to-image
-                height=height,
-                width=width,
-                num_inference_steps=step,
-                guidance_scale=guidance_scale,
-                generator=generator,
-            )
-        
-        # Clean up
-        del pipe
-        gc.collect()
-        torch.cuda.empty_cache()
-        
-        # Convert PIL images to tensors in ComfyUI format
-        images = []
-        for img in result.images:
-            # Convert PIL image to numpy array in [H, W, C] format with values in [0, 1]
-            img_array = np.array(img).astype(np.float32) / 255.0
-            # Convert to torch tensor with shape [H, W, C]
-            img_tensor = torch.from_numpy(img_array)
-            # Ensure it's in the right format [H, W, C]
-            if img_tensor.dim() == 3:
-                # Add batch dimension if not already present
-                img_tensor = img_tensor.unsqueeze(0)  # Add batch dimension at index 0 to make [B, H, W, C]
-            images.append(img_tensor)
-
-        # Stack images if there are multiple
-        if len(images) > 1:
-            final_image = torch.cat(images, dim=0)  # Concatenate along batch dimension
-        else:
-            final_image = images[0]
-            
-        return (final_image,)
-
-# def is_edit_pipeline(pipeline):
-#     # get pipeline class
-#     pipeline_class = type(pipeline)
-#     print("pipeline_class", pipeline_class)
-#     is_edit = pipeline_class in EDIT_PIPELINES
-#     print("is_edit", is_edit)
-    
-#     return is_edit
 
 class DiffusersSampling:
     """
@@ -1205,7 +1017,6 @@ NODE_CLASS_MAPPINGS = {
     "DiffusersLoraStatViewer": DiffusersLoraStatViewer,
     "DiffusersMergeLoraToPipeline": DiffusersMergeLoraToPipeline,
     "DiffusersGenPriorTokens": DiffusersGenPriorTokens,
-    "GLMImageGenerateNode": GLMImageGenerateNode,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -1218,5 +1029,4 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "DiffusersLoraStatViewer": "Diffusers LoRA Stat Viewer",
     "DiffusersMergeLoraToPipeline": "Diffusers Merge LoRA to Pipeline",
     "DiffusersGenPriorTokens": "Diffusers Generate Prior Tokens",
-    "GLMImageGenerateNode": "GLM Image Generate (with Cache)",
 }
