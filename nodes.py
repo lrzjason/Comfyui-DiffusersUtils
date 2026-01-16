@@ -695,6 +695,7 @@ class DiffusersSampling:
             negative_prompt_embeds = get_prompt_embeds(negative_diffusers_cond)
         else:
             negative_prompt_embeds = torch.zeros_like(prompt_embeds)
+            negative_prompt_embeds = negative_prompt_embeds.to(device)
             pipeline_kwargs["negative_prompt_embeds"] = negative_prompt_embeds
             
         if "prior_tokens" in diffusers_cond:
@@ -703,6 +704,9 @@ class DiffusersSampling:
             # print("diffusers_prior_tokens", diffusers_prior_tokens)
             # Handle GLM pipeline with prior tokens from diffusers_cond
             if prior_token_ids is not None:
+                prior_token_ids = prior_token_ids.to(device)
+                if prior_image_token_ids is not None:
+                    prior_image_token_ids = prior_image_token_ids.to(device)
                 # Use prior tokens from diffusers_cond
                 pipeline_kwargs["prior_token_ids"] = prior_token_ids
                 pipeline_kwargs["prior_image_token_ids"] = prior_image_token_ids
