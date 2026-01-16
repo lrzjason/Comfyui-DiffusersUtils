@@ -325,10 +325,6 @@ class DiffusersGenPriorTokensDebug:
     def generate_prior_tokens_debug(self, model_path, diffusers_cond, prompt, image=None, width=1024, height=1024):
         print(f"Using debug function to generate prior tokens for: {model_path}")
         
-        # Load a minimal pipeline for prior token generation using the built-in method
-    
-        from glm_image.pipeline_glm_image import GlmImagePipeline
-        
         # Load a minimal pipeline with only the required components for prior token generation
         text_pipeline = GlmImagePipeline.from_pretrained(
             model_path,
