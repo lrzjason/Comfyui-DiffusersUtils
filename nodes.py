@@ -325,6 +325,23 @@ class DiffusersGenPriorTokensDebug:
     def generate_prior_tokens_debug(self, model_path, diffusers_cond, prompt, image=None, width=1024, height=1024):
         print(f"Using debug function to generate prior tokens for: {model_path}")
         
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        # Convert image tensor to PIL if provided
+        image_list = None
+        if image is not None:
+            # Convert image tensor to PIL for GLM pipeline
+            if len(image.shape) == 4:
+                # [B, H, W, C] format
+                image_tensor = image[0] if image.shape[0] > 1 else image.squeeze(0)
+            else:
+                image_tensor = image
+            
+            # Convert from [0,1] to [0,255] and to numpy
+            image_np = (image_tensor * 255).byte().numpy()
+            image_pil = Image.fromarray(image_np.astype(np.uint8))
+            image_list = [image_pil]
+            
         # Load a minimal pipeline with only the required components for prior token generation
         text_pipeline = GlmImagePipeline.from_pretrained(
             model_path,
