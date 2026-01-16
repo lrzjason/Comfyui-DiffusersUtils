@@ -296,6 +296,67 @@ class DiffusersGenPriorTokens:
         return (diffusers_cond,)
 
 
+class DiffusersGenPriorTokensDebug:
+    """
+    A debug version of DiffusersGenPriorTokens that runs the prior token generation process
+    inside the node instead of in a subprocess to help debug environment differences.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model_path": ("STRING", {"default": "F:/HF_Models/GLM/GLM-Image"}),
+                "diffusers_cond": ("DIFFUSERS_COND",),
+                "prompt": ("STRING", {"multiline": True, "default": "Masterpiece, best quality, 8k uhd, photo realistic,"}),
+            },
+            "optional": {
+                "image": ("IMAGE",),  # Optional image input for image-to-image
+                "width": ("INT", {"default": 1024, "min": 256, "max": 4096, "step": 64}),
+                "height": ("INT", {"default": 1024, "min": 256, "max": 4096, "step": 64}),
+            }
+        }
+
+    RETURN_TYPES = ("DIFFUSERS_COND",)
+    RETURN_NAMES = ("diffusers_cond",)
+    FUNCTION = "generate_prior_tokens_debug"
+    CATEGORY = "Diffusers/GLM"
+
+    def generate_prior_tokens_debug(self, model_path, diffusers_cond, prompt, image=None, width=1024, height=1024):
+        print(f"Using debug function to generate prior tokens for: {model_path}")
+        
+        # Load a minimal pipeline for prior token generation using the built-in method
+    
+        from glm_image.pipeline_glm_image import GlmImagePipeline
+        
+        # Load a minimal pipeline with only the required components for prior token generation
+        text_pipeline = GlmImagePipeline.from_pretrained(
+            model_path,
+            text_encoder=None,
+            vae=None,
+            transformer=None,
+            torch_dtype=torch.bfloat16,
+        )
+        
+        text_pipeline = text_pipeline.to(device)
+        
+        # Use the built-in generate_prior_tokens method
+        prior_tokens = text_pipeline.generate_prior_tokens(
+            prompt=prompt,
+            image=image_list,
+            height=height,
+            width=width,
+            device=device,
+        )
+        
+        # Create updated diffusers_cond with prior tokens included
+        diffusers_cond["width"] = width
+        diffusers_cond["height"] = height
+        diffusers_cond["prior_tokens"] = prior_tokens
+        
+        return (diffusers_cond,)
+
+
 class DiffusersPipeline:
     """
     A flexible node that can initialize different LongCat diffusion pipelines with dynamic components.
