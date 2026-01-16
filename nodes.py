@@ -705,7 +705,7 @@ class DiffusersSampling:
             # The LongCat pipeline expects a list of PIL images for the 'image' parameter
             pipeline_kwargs["image"] = [image_pil]
             
-        print("pipeline_kwargs", pipeline_kwargs)
+        # print("pipeline_kwargs", pipeline_kwargs)
         result = pipeline(**pipeline_kwargs)
 
         # Convert PIL images to tensors in ComfyUI format
@@ -1078,6 +1078,7 @@ NODE_CLASS_MAPPINGS = {
     "DiffusersLoraStatViewer": DiffusersLoraStatViewer,
     "DiffusersMergeLoraToPipeline": DiffusersMergeLoraToPipeline,
     "DiffusersGenPriorTokens": DiffusersGenPriorTokens,
+    "DiffusersGenPriorTokensDebug": DiffusersGenPriorTokensDebug
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -1090,4 +1091,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "DiffusersLoraStatViewer": "Diffusers LoRA Stat Viewer",
     "DiffusersMergeLoraToPipeline": "Diffusers Merge LoRA to Pipeline",
     "DiffusersGenPriorTokens": "Diffusers Generate Prior Tokens",
+    "DiffusersGenPriorTokensDebug": "Diffusers Generate Prior Tokens Debug"
 }
