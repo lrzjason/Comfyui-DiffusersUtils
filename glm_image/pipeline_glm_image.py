@@ -616,7 +616,7 @@ class GlmImagePipeline(DiffusionPipeline):
 
         # 2. Preprocess image tokens and prompt tokens
         if prior_token_ids is None:
-            prior_token_ids, prior_token_image_ids = self.generate_prior_tokens(
+            prior_token_ids, prior_image_token_ids = self.generate_prior_tokens(
                 prompt=prompt[0] if isinstance(prompt, list) else prompt,
                 image=image,
                 height=height,
@@ -672,7 +672,7 @@ class GlmImagePipeline(DiffusionPipeline):
             latents_mean = latents_mean.to(device=device, dtype=prompt_embeds.dtype)
             latents_std = latents_std.to(device=device, dtype=prompt_embeds.dtype)
 
-            for condition_image, condition_image_prior_token_id in zip(image, prior_token_image_ids):
+            for condition_image, condition_image_prior_token_id in zip(image, prior_image_token_ids):
                 condition_image = condition_image.to(device=device, dtype=prompt_embeds.dtype)
                 condition_latent = retrieve_latents(
                     self.vae.encode(condition_image), generator=generator, sample_mode="argmax"

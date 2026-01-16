@@ -35,6 +35,11 @@ from .glm_image.pipeline_glm_image import GlmImagePipeline
 from transformers import ByT5Tokenizer, T5EncoderModel, GlmImageForConditionalGeneration, GlmImageProcessor
 from diffusers.models import GlmImageTransformer2DModel
 
+ENCODE_IMAGE_PIPELINES = [
+    LongCatImageEditPipeline,
+    LongCatImagePipeline
+]
+
 # Map pipeline names to their classes with their available components
 pipeline_registry = {
     'LongCatImagePipeline': {
@@ -76,6 +81,10 @@ pipeline_registry = {
 EDIT_PIPELINES = [
     LongCatImageEditPipeline
 ]
+
+def is_image_encode_pipeline(pipeline):
+    # check if pipeline class is in ENCODE_IMAGE_PIPELINES list
+    return type(pipeline) in ENCODE_IMAGE_PIPELINES
 
 def swap_components(piepeline, available_components):
     # remove all components
@@ -128,7 +137,7 @@ class DiffusersTextEncode:
         """
         # Determine pipeline type and use appropriate encoding method
         if hasattr(pipeline, 'encode_prompt'):
-            if image is not None:
+            if image is not None and is_image_encode_pipeline(pipeline):
                 # Already a PIL image
                 encoded_output = pipeline.encode_prompt(
                     prompt=[prompt],
@@ -222,15 +231,27 @@ class DiffusersGenPriorTokens:
         if image is not None:
             # Convert image tensor to PIL for GLM pipeline
             if len(image.shape) == 4:
-                # [B, H, W, C] format
-                image_tensor = image[0] if image.shape[0] > 1 else image.squeeze(0)
+                # [B, H, W, C] format - could be multiple images
+                if image.shape[0] == 1:
+                    # Single image
+                    image_tensor = image.squeeze(0)
+                    image_np = (image_tensor * 255).byte().numpy()
+                    image_pil = Image.fromarray(image_np.astype(np.uint8))
+                    image_list = [image_pil]
+                else:
+                    # Multiple images
+                    image_list = []
+                    for i in range(image.shape[0]):
+                        image_tensor = image[i]
+                        image_np = (image_tensor * 255).byte().numpy()
+                        image_pil = Image.fromarray(image_np.astype(np.uint8))
+                        image_list.append(image_pil)
             else:
+                # Single image tensor
                 image_tensor = image
-            
-            # Convert from [0,1] to [0,255] and to numpy
-            image_np = (image_tensor * 255).byte().numpy()
-            image_pil = Image.fromarray(image_np.astype(np.uint8))
-            image_list = [image_pil]
+                image_np = (image_tensor * 255).byte().numpy()
+                image_pil = Image.fromarray(image_np.astype(np.uint8))
+                image_list = [image_pil]
         
         # Use isolated subprocess for prior token generation
         print("Generating prior tokens in isolated environment...")
@@ -255,6 +276,22 @@ class DiffusersGenPriorTokens:
                 "--dtype", "bfloat16"  # Match the dtype used elsewhere
             ]
             
+            # Add image path if image is provided
+            if image_list is not None:
+                # Create a temporary directory to hold all images
+                import uuid
+                import tempfile
+                import os
+                temp_image_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), f"temp_images_{uuid.uuid4().hex}")
+                os.makedirs(temp_image_dir, exist_ok=True)
+                
+                # Save all images to the temporary directory
+                for idx, img in enumerate(image_list):
+                    img_path = os.path.join(temp_image_dir, f"image_{idx}.png")
+                    img.save(img_path)
+                
+                cmd.extend(["--image_path", temp_image_dir])
+            
             # Run the isolated prior token generation
             result = subprocess.run(cmd, capture_output=True, text=True, cwd=os.path.dirname(__file__))
             
@@ -270,16 +307,17 @@ class DiffusersGenPriorTokens:
                 raise RuntimeError(f"Prior token generation failed: {error_msg}")
             
             # Load the generated prior tokens
-            prior_tokens_data = torch.load(temp_prior_tokens_path)
-            prior_token_ids = prior_tokens_data["prior_token_ids"].to(device=device, dtype=torch.long)
-            prior_image_token_ids = prior_tokens_data.get("prior_image_token_ids", None)
-            if prior_image_token_ids is not None:
-                prior_image_token_ids = prior_image_token_ids.to(device=device, dtype=torch.long)
+            prior_tokens = torch.load(temp_prior_tokens_path)
+            # prior_tokens_data = torch.load(temp_prior_tokens_path)
+            # prior_token_ids = prior_tokens_data["prior_token_ids"].to(device=device, dtype=torch.long)
+            # prior_image_token_ids = prior_tokens_data.get("prior_image_token_ids", None)
+            # if prior_image_token_ids is not None:
+            #     prior_image_token_ids = prior_image_token_ids.to(device=device, dtype=torch.long)
             
-            print(f"Successfully generated prior tokens: {result_json}")
+            # print(f"Successfully generated prior tokens: {result_json}")
             
-            # Create prior_tokens tuple like the original pipeline
-            prior_tokens = (prior_token_ids, prior_image_token_ids)
+            # # Create prior_tokens tuple like the original pipeline
+            # prior_tokens = (prior_token_ids, prior_image_token_ids)
             
         finally:
             # Clean up temporary files
@@ -287,6 +325,11 @@ class DiffusersGenPriorTokens:
                 os.unlink(temp_prior_tokens_path)
             if os.path.exists(temp_result_path):
                 os.unlink(temp_result_path)
+            # Clean up temporary image directory if created
+            if image_list is not None and 'temp_image_dir' in locals():
+                import shutil
+                if os.path.exists(temp_image_dir):
+                    shutil.rmtree(temp_image_dir)
         
         # Create updated diffusers_cond with prior tokens included
         diffusers_cond["width"] = width
